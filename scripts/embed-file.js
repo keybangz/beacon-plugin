@@ -3,7 +3,7 @@
 // Input: $TOOL_INPUT_file_path (single file path)
 // Purpose: re-embed one file — fast, runs on every edit
 
-import { BeaconDatabase } from './lib/db.js';
+import { openDatabase } from './lib/open-db.js';
 import { Embedder } from './lib/embedder.js';
 import { chunkCode } from './lib/chunker.js';
 import { loadConfig } from './lib/config.js';
@@ -31,7 +31,7 @@ if (!existsSync(dbPath)) process.exit(0);
 // Safe DB init
 let db;
 try {
-  db = new BeaconDatabase(dbPath, config.embedding.dimensions);
+  db = openDatabase(dbPath, config.embedding.dimensions);
 } catch (err) {
   console.error(`Beacon: embed-file failed to open database: ${err.message}`);
   process.exit(0);

@@ -3,7 +3,7 @@
 // Input: [--top-k N] [--threshold F] "<query1>" ["<query2>" ...]
 // Output: JSON array (single query, backwards compatible) or array of {query, matches} (multiple queries)
 
-import { BeaconDatabase } from './lib/db.js';
+import { openDatabase } from './lib/open-db.js';
 import { Embedder } from './lib/embedder.js';
 import { loadConfig } from './lib/config.js';
 import { existsSync } from 'fs';
@@ -48,7 +48,7 @@ if (!existsSync(dbPath)) {
 // Safe DB init
 let db;
 try {
-  db = new BeaconDatabase(dbPath, config.embedding.dimensions);
+  db = openDatabase(dbPath, config.embedding.dimensions);
 } catch (err) {
   console.error(JSON.stringify({ error: `Failed to open database: ${err.message}. Try /reindex.` }));
   process.exit(1);

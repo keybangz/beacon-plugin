@@ -2,7 +2,7 @@
 // Called by: SessionStart hook (async)
 // Purpose: full index on first run, diff-based catch-up on subsequent runs
 
-import { BeaconDatabase } from './lib/db.js';
+import { openDatabase } from './lib/open-db.js';
 import { Embedder } from './lib/embedder.js';
 import { chunkCode } from './lib/chunker.js';
 import { loadConfig } from './lib/config.js';
@@ -50,10 +50,9 @@ process.on('exit', () => { deletePidFile(); });
 // Safe DB init
 let db;
 try {
-  db = new BeaconDatabase(path.join(dbDir, 'embeddings.db'), config.embedding.dimensions);
+  db = openDatabase(path.join(dbDir, 'embeddings.db'), config.embedding.dimensions);
 } catch (err) {
   console.error(`Beacon: failed to open database: ${err.message}`);
-  console.error('Beacon: try deleting .claude/.beacon/embeddings.db and restarting, or run /reindex.');
   deletePidFile();
   process.exit(0);
 }

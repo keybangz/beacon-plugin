@@ -2,7 +2,7 @@
 // Called by: /index command
 // Output: Rich JSON for Claude to format as a visual index overview
 
-import { BeaconDatabase } from './lib/db.js';
+import { openDatabase } from './lib/open-db.js';
 import { loadConfig } from './lib/config.js';
 import { getRepoFiles } from './lib/git.js';
 import { shouldIndex } from './lib/ignore.js';
@@ -53,7 +53,7 @@ if (!existsSync(dbPath)) {
 // Safe DB init
 let db;
 try {
-  db = new BeaconDatabase(dbPath, config.embedding.dimensions);
+  db = openDatabase(dbPath, config.embedding.dimensions);
 } catch (err) {
   const provider = detectProvider();
   console.log(JSON.stringify({

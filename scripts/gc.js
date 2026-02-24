@@ -2,7 +2,7 @@
 // Called by: PostToolUse hook on Bash (after git checkout, rm, mv, etc.)
 // Purpose: detect deleted files and remove their embeddings
 
-import { BeaconDatabase } from './lib/db.js';
+import { openDatabase } from './lib/open-db.js';
 import { loadConfig } from './lib/config.js';
 import { existsSync } from 'fs';
 import path from 'path';
@@ -14,7 +14,7 @@ if (!existsSync(dbPath)) process.exit(0);
 // Safe DB init
 let db;
 try {
-  db = new BeaconDatabase(dbPath, config.embedding.dimensions);
+  db = openDatabase(dbPath, config.embedding.dimensions);
 } catch (err) {
   console.error(`Beacon: gc failed to open database: ${err.message}`);
   process.exit(0);

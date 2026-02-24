@@ -2,7 +2,7 @@
 // Called by: /index-status command and PreCompact hook
 // Flags: --compact-warning (minimal output for PreCompact injection)
 
-import { BeaconDatabase } from './lib/db.js';
+import { openDatabase } from './lib/open-db.js';
 import { loadConfig } from './lib/config.js';
 import { existsSync } from 'fs';
 import path from 'path';
@@ -18,7 +18,7 @@ if (!existsSync(dbPath)) {
 // Safe DB init
 let db;
 try {
-  db = new BeaconDatabase(dbPath, config.embedding.dimensions);
+  db = openDatabase(dbPath, config.embedding.dimensions);
 } catch (err) {
   if (process.argv.includes('--compact-warning')) {
     console.log('Beacon: index unavailable (database error). Prefer grep for code search.');

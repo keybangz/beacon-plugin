@@ -2,7 +2,7 @@
 // Called by: /terminate-indexer command
 // Purpose: kill a running sync process and clean up state
 
-import { BeaconDatabase } from './lib/db.js';
+import { openDatabase } from './lib/open-db.js';
 import { loadConfig } from './lib/config.js';
 import { existsSync, readFileSync, unlinkSync } from 'fs';
 import path from 'path';
@@ -47,7 +47,7 @@ try { unlinkSync(pidFile); } catch { /* ignore */ }
 if (existsSync(dbPath)) {
   let db;
   try {
-    db = new BeaconDatabase(dbPath, config.embedding.dimensions);
+    db = openDatabase(dbPath, config.embedding.dimensions);
     db.clearSyncProgress();
     db.setSyncState('sync_status', 'idle');
   } catch (err) {
