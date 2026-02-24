@@ -243,6 +243,42 @@ Beacon stores its SQLite database at `.claude/.beacon/embeddings.db` (configurab
 
 The database uses [sqlite-vec](https://github.com/asg017/sqlite-vec) for vector search and FTS5 for keyword matching.
 
+## Troubleshooting
+
+### What if Ollama is down?
+
+Beacon degrades gracefully when the embedding server is unreachable — it never blocks your session.
+
+| Scenario | Behavior |
+|----------|----------|
+| **Session start** | Sync is skipped, error is logged, session continues normally |
+| **Search** | Falls back to keyword-only (BM25) search — still returns results |
+| **File edits** | Re-embedding fails silently, old embeddings are preserved |
+| **Status commands** | Work normally (DB-only, no Ollama needed) |
+
+Start Ollama at any time and run `/run-indexer` to catch up.
+
+### Manual indexing
+
+| Command | What it does |
+|---------|-------------|
+| `/run-indexer` | Manually trigger indexing — useful when `auto_index` is off or after starting Ollama late |
+| `/reindex` | Force a full re-index from scratch (deletes existing embeddings first) |
+| `/terminate-indexer` | Kill a stuck sync process and clean up lock state |
+
+### Checking index health
+
+Run `/index` for a visual overview with a coverage bar, file list, and provider info. For a quick numeric summary, use `/index-status` — it shows file count, chunk count, and last sync time.
+
+Things to look for:
+- **Low coverage %** — files may be excluded by glob patterns or exceeding `max_file_size_kb`
+- **Sync status errors** — usually means the embedding server was unreachable during the last sync
+- **Stale sync warnings** — the index hasn't been updated recently; run `/run-indexer` to refresh
+
+### Verifying search
+
+Run `/search-code` with a test query to confirm search is working. If results include `"FTS-only"` in debug output, the embedding server is unreachable — search still works but without semantic matching (keyword/BM25 only).
+
 ## License
 
 [MIT](LICENSE)
