@@ -25,37 +25,59 @@
 
 ---
 
+## Demo
+
+<!-- User will insert demo content here -->
+
+---
+
 ## Quick Start
 
 ```bash
-# 1. Add the Beacon marketplace
-claude plugin marketplace add sagarmk/Claude-Code-Beacon-Plugin
-
-# 2. Install the plugin
-claude plugin install beacon@claude-code-beacon-plugin
-
-# 3. Pull the default embedding model (local, free)
+# Install Ollama (local embeddings, free)
+brew install ollama
+ollama serve &
 ollama pull nomic-embed-text
 
-# 4. Restart Claude Code — Beacon indexes automatically on your next session
+# Install Beacon plugin
+claude plugin marketplace add sagarmk/Claude-Code-Beacon-Plugin
+claude plugin install beacon@claude-code-beacon-plugin
+
+# Restart Claude Code — Beacon indexes automatically
 ```
 
-## Why Beacon?
+## Commands
 
-**Understands your questions.** Ask "where is the auth flow?" and get `lib/auth.ts` — not every file containing the word "auth". Hybrid search combines vector similarity, BM25 keyword matching, and identifier boosting.
+| Command | Description |
+|---------|-------------|
+| `/search-code` | Hybrid code search — semantic + keyword + BM25 matching |
+| `/index` | Visual overview of Beacon index — files, chunks, coverage, provider |
+| `/index-status` | Show index health — file count, chunk count, last sync |
+| `/reindex` | Force a full re-index (escape hatch if index gets corrupted) |
+| `/run-indexer` | Manually trigger indexing (useful when auto-index is off) |
+| `/terminate-indexer` | Kill a running sync process and clean up state |
+| `/config` | View and modify Beacon configuration |
+| `/blacklist` | Prevent indexing of specific directories |
+| `/whitelist` | Allow indexing in directories that would otherwise be blacklisted |
 
-**Stays in sync automatically.** Hooks handle everything: full index on first run, incremental re-embedding on edits, garbage collection on deletes. No manual maintenance.
+Beacon also provides a **code-explorer** agent for deep codebase exploration and a **semantic-code-search** skill that Claude can invoke automatically.
 
-**Works with any embedding provider.** Ollama runs locally for free. Or plug in OpenAI, Voyage AI, LiteLLM, or any OpenAI-compatible API.
+<details>
+<summary><strong>Why Beacon?</strong></summary>
 
-**Gives Claude better context.** 9 slash commands, a code-explorer agent, and a grep-nudge hook that steers Claude toward semantic search when grep would miss the mark.
+- **Understands your questions** — ask "where is the auth flow?" and get `lib/auth.ts`, not every file containing "auth"
+- **Stays in sync automatically** — hooks handle full index, incremental re-embedding on edits, and garbage collection
+- **Works with any embedding provider** — Ollama (local/free), OpenAI, Voyage AI, LiteLLM, or any OpenAI-compatible API
+- **Gives Claude better context** — slash commands, a code-explorer agent, and a grep-nudge hook for smarter search
 
-## Embedding Providers
+</details>
+
+<details>
+<summary><strong>Embedding Providers</strong></summary>
 
 Beacon defaults to **Ollama** (local, free, no API key needed). For cloud providers, create `.claude/beacon.json` in your repo:
 
-<details>
-<summary><strong>OpenAI</strong></summary>
+#### OpenAI
 
 ```bash
 export OPENAI_API_KEY="sk-..."
@@ -74,10 +96,7 @@ export OPENAI_API_KEY="sk-..."
 }
 ```
 
-</details>
-
-<details>
-<summary><strong>Voyage AI</strong></summary>
+#### Voyage AI
 
 ```bash
 export VOYAGE_API_KEY="pa-..."
@@ -96,10 +115,7 @@ export VOYAGE_API_KEY="pa-..."
 }
 ```
 
-</details>
-
-<details>
-<summary><strong>LiteLLM proxy</strong> (Vertex AI, Bedrock, Azure, etc.)</summary>
+#### LiteLLM proxy (Vertex AI, Bedrock, Azure, etc.)
 
 ```bash
 pip install litellm
@@ -119,32 +135,14 @@ litellm --model vertex_ai/text-embedding-004 --port 4000
 }
 ```
 
-</details>
-
-<details>
-<summary><strong>Custom endpoint</strong></summary>
+#### Custom endpoint
 
 Any server implementing the OpenAI `/v1/embeddings` API will work. Set `api_base`, `model`, `dimensions`, and optionally `api_key_env` in `.claude/beacon.json`.
 
 </details>
 
-## Commands
-
-| Command | Description |
-|---------|-------------|
-| `/search-code` | Hybrid code search — semantic + keyword + BM25 matching |
-| `/index` | Visual overview of Beacon index — files, chunks, coverage, provider |
-| `/index-status` | Show index health — file count, chunk count, last sync |
-| `/reindex` | Force a full re-index (escape hatch if index gets corrupted) |
-| `/run-indexer` | Manually trigger indexing (useful when auto-index is off) |
-| `/terminate-indexer` | Kill a running sync process and clean up state |
-| `/config` | View and modify Beacon configuration |
-| `/blacklist` | Prevent indexing of specific directories |
-| `/whitelist` | Allow indexing in directories that would otherwise be blacklisted |
-
-Beacon also provides a **code-explorer** agent for deep codebase exploration and a **semantic-code-search** skill that Claude can invoke automatically.
-
-## How It Works
+<details>
+<summary><strong>How It Works</strong></summary>
 
 Beacon uses Claude Code [hooks](https://docs.anthropic.com/en/docs/claude-code/hooks) to stay in sync with your codebase:
 
@@ -155,6 +153,8 @@ Beacon uses Claude Code [hooks](https://docs.anthropic.com/en/docs/claude-code/h
 | **PostToolUse** | `Bash` | Garbage collects embeddings for deleted files |
 | **PreCompact** | Before context compaction | Injects index status so search capability survives compaction |
 | **PreToolUse** | `Grep` | Nudges Claude toward Beacon when grep is used for semantic-style queries |
+
+</details>
 
 <details>
 <summary><strong>Configuration</strong></summary>
@@ -216,9 +216,7 @@ Default configuration (`config/beacon.default.json`):
 | `search.similarity_threshold` | `0.35` | Minimum similarity score |
 | `search.hybrid.enabled` | `true` | Enable hybrid search (set `false` for pure vector) |
 
-</details>
-
-## Per-repo Overrides
+#### Per-repo overrides
 
 Create `.claude/beacon.json` in any repo to override defaults. Values are deep-merged with the default config:
 
@@ -237,13 +235,14 @@ Create `.claude/beacon.json` in any repo to override defaults. Values are deep-m
 }
 ```
 
-## Storage
+#### Storage
 
-Beacon stores its SQLite database at `.claude/.beacon/embeddings.db` (configurable via `storage.path`). This file is auto-generated and safe to delete — run `/reindex` to rebuild.
+Beacon stores its SQLite database at `.claude/.beacon/embeddings.db` (configurable via `storage.path`). This file is auto-generated and safe to delete — run `/reindex` to rebuild. The database uses [sqlite-vec](https://github.com/asg017/sqlite-vec) for vector search and FTS5 for keyword matching.
 
-The database uses [sqlite-vec](https://github.com/asg017/sqlite-vec) for vector search and FTS5 for keyword matching.
+</details>
 
-## Troubleshooting
+<details>
+<summary><strong>Troubleshooting</strong></summary>
 
 ### What if Ollama is down?
 
@@ -278,6 +277,8 @@ Things to look for:
 ### Verifying search
 
 Run `/search-code` with a test query to confirm search is working. If results include `"FTS-only"` in debug output, the embedding server is unreachable — search still works but without semantic matching (keyword/BM25 only).
+
+</details>
 
 ## License
 
