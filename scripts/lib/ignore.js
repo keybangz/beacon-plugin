@@ -1,13 +1,14 @@
 import { existsSync, readFileSync, statSync } from 'fs';
 import path from 'path';
 import picomatch from 'picomatch';
+import { getRepoRoot } from './repo-root.js';
 
 let beaconIgnorePatterns = null;
 
 function loadBeaconIgnore() {
   if (beaconIgnorePatterns !== null) return beaconIgnorePatterns;
 
-  const beaconIgnorePath = path.resolve('.beaconignore');
+  const beaconIgnorePath = path.join(getRepoRoot(), '.beaconignore');
   if (existsSync(beaconIgnorePath)) {
     beaconIgnorePatterns = readFileSync(beaconIgnorePath, 'utf-8')
       .split('\n')

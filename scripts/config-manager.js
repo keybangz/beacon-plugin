@@ -6,6 +6,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { getRepoRoot } from './lib/repo-root.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = process.env.CLAUDE_PLUGIN_ROOT || path.resolve(__dirname, '..');
@@ -13,7 +14,7 @@ const PLUGIN_ROOT = process.env.CLAUDE_PLUGIN_ROOT || path.resolve(__dirname, '.
 // --- File paths ---
 const defaultsPath = path.join(PLUGIN_ROOT, 'config', 'beacon.default.json');
 const providersPath = path.join(PLUGIN_ROOT, 'config', 'providers.json');
-const userConfigPath = path.resolve('.claude', 'beacon.json');
+const userConfigPath = path.join(getRepoRoot(), '.claude', 'beacon.json');
 
 // --- Load files ---
 const defaults = JSON.parse(readFileSync(defaultsPath, 'utf-8'));

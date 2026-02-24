@@ -1,6 +1,7 @@
 import { readFileSync, existsSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { getRepoRoot } from './repo-root.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = process.env.CLAUDE_PLUGIN_ROOT || path.resolve(__dirname, '..', '..');
@@ -17,7 +18,7 @@ export function loadConfig() {
   }
 
   // Load user overrides from repo's .claude/beacon.json (cwd = repo root)
-  const userConfigPath = path.resolve('.claude', 'beacon.json');
+  const userConfigPath = path.join(getRepoRoot(), '.claude', 'beacon.json');
   let userConfig = {};
   if (existsSync(userConfigPath)) {
     try {
@@ -29,7 +30,14 @@ export function loadConfig() {
   }
 
   // Deep merge: defaults <- user config (user wins)
-  return deepMerge(defaults, userConfig);
+  const merged = deepMerge(defaults, userConfig);
+
+  // Resolve relative storage.path to repo root
+  if (merged.storage?.path && !path.isAbsolute(merged.storage.path)) {
+    merged.storage.path = path.join(getRepoRoot(), merged.storage.path);
+  }
+
+  return merged;
 }
 
 function deepMerge(target, source) {
