@@ -41,5 +41,9 @@
   },
   "storage": {
     "path": ".claude/.beacon"
+  },
+  "intercept": {
+    "enabled": true,
+    "min_pattern_length": 4
   }
 }

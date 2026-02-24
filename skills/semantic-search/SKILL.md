@@ -1,11 +1,11 @@
 ---
 name: semantic-code-search
-description: "Primary code search for this repo — hybrid search (semantic + keyword + BM25) that outperforms grep on all query types including keyword lookups (98% vs 85% accuracy). Always try Beacon FIRST before grep/glob. Only use grep for: regex patterns, string literal counting, or within-file searches after you already know the file."
+description: "Primary code search for this repo — hybrid search (semantic + keyword + BM25) that outperforms grep on all query types including keyword lookups (98% vs 85% accuracy). Grep is automatically intercepted and redirected to Beacon for most queries. Grep only passes through for: regex patterns, dotted identifiers, path-like patterns, string literal counting, short patterns (<=3 chars), or within-file searches."
 ---
 
 # Hybrid Code Search (Beacon)
 
-This repo has a Beacon hybrid search index combining semantic embeddings, BM25 keyword matching, and identifier boosting. **Use this as your default code search** — it handles conceptual queries, keyword lookups, and symbol searches better than grep alone.
+This repo has a Beacon hybrid search index combining semantic embeddings, BM25 keyword matching, and identifier boosting. **Beacon is enforced as the default search** — grep is automatically intercepted and redirected to Beacon for queries it handles better.
 
 ## How to search
 
@@ -32,15 +32,22 @@ JSON array of matches, each with:
 - `score` — final hybrid score (when hybrid enabled)
 - `preview` — first 300 chars of matched chunk
 
-## When to use this vs grep
+## Grep intercept behavior
 
-| Use Beacon search | Use grep |
+Grep is **denied and redirected** to Beacon unless one of these conditions is met:
+
+| Grep passes through when... | Example |
 |---|---|
-| "Where do we handle auth?" | `/regex pattern/` |
-| "Find the payment processing code" | Counting occurrences of a string literal |
-| "What calls the user API?" | Searching within a specific file you already found |
-| "Where is SearchFilters defined?" | `output_mode: "count"` queries |
-| "Find error handling patterns" | Very short patterns (<=3 chars) |
+| Pattern has regex metacharacters | `function\s+\w+` |
+| Targets a specific file | `path: "src/lib/db.js"` |
+| `output_mode` is `"count"` | Counting occurrences |
+| Pattern is <= 3 characters | `fs`, `db` |
+| Dotted identifier | `fs.readFileSync`, `path.join` |
+| Path-like pattern (contains `/` or `\`) | `src/components` |
+| Beacon index is unhealthy | DB missing, empty, dimension mismatch |
+| Intercept disabled via config | `intercept.enabled: false` |
+
+To disable interception entirely, set `intercept.enabled: false` in `.claude/beacon.json`.
 
 ## Workflow
 1. Search with Beacon → get candidate files + line ranges with scores

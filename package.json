@@ -8,6 +8,7 @@
     "search": "node scripts/search.js",
     "status": "node scripts/status.js",
     "gc": "node scripts/gc.js",
+    "benchmark": "node reports/workflow_benchmark.js",
     "test": "vitest"
   },
   "dependencies": {
