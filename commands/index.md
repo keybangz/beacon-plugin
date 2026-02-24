@@ -5,127 +5,143 @@ allowed-tools: [Bash]
 
 # /index
 
-Run `node ${CLAUDE_PLUGIN_ROOT}/scripts/index-info.js` and format the JSON output as a rich visual overview, styled like Claude Code's `/context` command. This output is ALWAYS viewed in a CLI terminal — never use markdown tables. Use padded/aligned plain text columns instead.
+Run `node ${CLAUDE_PLUGIN_ROOT}/scripts/index-info.js` and format the JSON output as a rich visual dashboard using Unicode box-drawing characters. This output is ALWAYS viewed in a CLI terminal — never use markdown tables.
 
-## Output Format
+## Visual Style
 
-Use `⊡` for bullet items, `⊠` for warnings/errors. All sections indented with 2 spaces. Section headers indented with 4 spaces.
+Use **rounded box-drawing characters** (`╭ ╮ ╰ ╯ │ ─`) to frame each section. Content inside boxes is indented with 3 spaces after `│`. Section titles appear inline in the top border: `╭── Title ───────╮`.
 
-CRITICAL: Never use markdown table syntax (`| col | col |` or `|---|---|`). Always use space-padded aligned columns for tabular data, like this:
+CRITICAL: Never use markdown table syntax (`| col | col |` or `|---|---|`). Use box-framed, space-padded aligned columns.
 
-```
-  filename.js              12 chunks    ~2m
-  other_file.ts             4 chunks    ~1h
-```
+**Box width:** All boxes should be the same width — 55 characters from `╭` to `╮`. Pad the top/bottom borders with `─` and content lines with spaces to fill the width. The last character before `│` on each line should be a space.
+
+**Progress/coverage bars** appear OUTSIDE boxes, indented with 4 spaces.
 
 ---
 
 ### If `status` is `"no_index"`:
 
 ```
-📊 Beacon Index — Not Initialized
-  ⊡ {config.model} · {config.provider_description} · {config.dimensions} dims
-  ⊡ No index found. It will be created on next session start.
-  ⊡ Storage: {config.storage_path}
+╭── 📊 Beacon Index — Not Initialized ─────────────────╮
+│   {config.model} · {config.provider_description}      │
+│   {config.dimensions} dims                            │
+╰───────────────────────────────────────────────────────╯
+
+    No index found. It will be created on next session start.
+    Storage: {config.storage_path}
 ```
 
 ---
 
 ### Normal output (index exists):
 
-#### 1. Header
+#### 1. Header Box
 
 ```
-📊 Beacon Index
-  ⊡ {config.model} · {config.provider_description} · {config.dimensions} dims
+╭── 📊 Beacon Index ────────────────────────────────────╮
+│   {config.model} · {config.provider_description}      │
+│   {config.dimensions} dims                            │
+╰───────────────────────────────────────────────────────╯
 ```
 
 #### 2. Sync Status (only if NOT idle)
 
-If `sync.status` is `"in_progress"`:
-```
-    Syncing
-  ⊡ {progress_bar} {sync.percent}% ({sync.completed}/{sync.total} files)
-  ⊡ Currently: {sync.current_file}
+If `sync.status` is `"in_progress"`, show between header and coverage:
 ```
 
-Build the progress bar: 20 chars wide, use `█` for filled and `░` for empty. Example: `████████████░░░░░░░░`
+    Syncing
+    ████████████░░░░░░░░  {sync.percent}% ({sync.completed}/{sync.total} files)
+    Currently: {sync.current_file}
+```
+
+Build the progress bar: 20 chars wide, use `█` for filled and `░` for empty.
 
 If `sync.status` is `"error"`:
 ```
-    ⊠ Sync Error
-  ⊠ {sync.error}
-  ⊡ Last successful sync: {last_sync as relative time}
-  ⊡ Try /reindex to force a fresh sync
+
+╭── ⚠ Sync Error ──────────────────────────────────────╮
+│   {sync.error}                                        │
+│   Last successful sync: {last_sync as relative time}  │
+│   Try /reindex to force a fresh sync                  │
+╰───────────────────────────────────────────────────────╯
 ```
 
 If `sync.status` is `"stale"`:
 ```
-    ⊠ Sync Stalled
-  ⊠ Sync appears to have stalled (started over 5 minutes ago)
-  ⊡ Try /reindex to force a fresh sync
+
+╭── ⚠ Sync Stalled ────────────────────────────────────╮
+│   Sync appears to have stalled (started over 5m ago)  │
+│   Try /reindex to force a fresh sync                  │
+╰───────────────────────────────────────────────────────╯
 ```
 
-#### 3. Coverage Bar (always show)
+#### 3. Coverage Bar (always show, outside boxes)
 
 ```
+
     Coverage
-  ⊡ {coverage_bar} {coverage_percent}% ({files_indexed} / {eligible_files} files)
+    ████████████████████░░  97%  (36 / 37 files)
 ```
 
 Build the coverage bar: 20 chars wide using `█` and `░`. If `coverage_percent` is null (no eligible count), show just the file count without a bar.
 
-If coverage < 50%, add: `  ⊠ Low coverage — consider running /reindex`
+If coverage < 50%, add on the next line: `    ⚠ Low coverage — consider running /reindex`
 
-#### 4. Index Statistics
+#### 4. Statistics Box
 
 ```
-    Index statistics
-  ⊡ Indexed files:     {files_indexed}
-  ⊡ Total chunks:      {total_chunks}
-  ⊡ Avg chunks/file:   {avg_chunks_per_file}
-  ⊡ DB size:           {db_size formatted as KB/MB}
-  ⊡ Last sync:         {last_sync as relative time}
+
+╭── Statistics ─────────────────────────────────────────╮
+│   Indexed files     {files_indexed}                   │
+│   Total chunks      {total_chunks}                    │
+│   Avg chunks/file   {avg_chunks_per_file}             │
+│   DB size           {db_size formatted as KB/MB}      │
+│   Last sync         {last_sync as relative time}      │
+╰───────────────────────────────────────────────────────╯
 ```
 
 Format `db_size_bytes`: <1024 → `N bytes`, <1MB → `N.N KB`, else `N.N MB`.
 Format timestamps as relative: "2 minutes ago", "3 hours ago", "about 1 day ago". If null, show "never".
 
-#### 5. Indexed Files
+#### 5. Files Box
 
 ```
-    Indexed files
-  ⊡ scripts/lib/db.js              12 chunks    ~2m
-  ⊡ scripts/lib/embedder.js         4 chunks    ~2m
-  ⊡ scripts/lib/chunker.js          6 chunks    ~2m
-  ⊡ src/index.ts                    3 chunks    ~1h
+
+╭── Files ──────────────────────────────────────────────╮
+│   scripts/lib/db.js            12 chunks    ~2m       │
+│   scripts/lib/embedder.js       4 chunks    ~2m       │
+│   scripts/lib/chunker.js        6 chunks    ~2m       │
+│   src/index.ts                   3 chunks    ~1h      │
+╰───────────────────────────────────────────────────────╯
 ```
 
 Rules:
-- Use `⊡` prefix for each file, then pad columns so chunk counts and timestamps align vertically
+- Pad columns so chunk counts and timestamps align vertically
 - Right-align the chunk count column, left-align the file path
 - If ≤ 20 files: show all files sorted by most recently updated
-- If > 20 files: show only the top 30 most recently updated, then add `  ⊡ ... and {N} more files`
+- If > 20 files: show only the top 30 most recently updated, then add `│   ... and {N} more files` as the last row before `╰`
 - Format `last_updated` as short relative: `~2m`, `~1h`, `~3d`, `~19h`
 
-#### 6. By Extension
+#### 6. Extensions Box
 
 ```
-    By extension
-  ⊡ .tsx       48 files
-  ⊡ .ts        11 files
-  ⊡ .sql        3 files
-  ⊡ .md         2 files
-  ⊡ .py         1 file
+
+╭── By extension ───────────────────────────────────────╮
+│   .tsx       48 files                                 │
+│   .ts        11 files                                 │
+│   .sql        3 files                                 │
+│   .md         2 files                                 │
+│   .py         1 file                                  │
+╰───────────────────────────────────────────────────────╯
 ```
 
-Use `⊡` prefix, pad the extension and count columns to align. Use "file" (singular) for count of 1.
+Pad extension and count columns to align. Use "file" (singular) for count of 1.
 
 ## Key Rules
 
 - Keep it scannable — no paragraph text, no verbose explanations
-- NEVER use markdown pipe tables — always use space-padded aligned columns with `⊡` bullets
-- Use consistent indentation: 2 spaces before `⊡` bullets
-- Section headers with 4 spaces indent
-- Never exceed ~50 lines total
+- NEVER use markdown pipe tables — only box-drawing characters and space-padded columns
+- All boxes are exactly 55 chars wide (from `╭` to `╮`)
+- One blank line between each box/section
+- Never exceed ~60 lines total
 - If sync is idle and healthy, do NOT show the sync section — go straight from header to coverage
