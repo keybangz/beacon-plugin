@@ -48,19 +48,33 @@ claude plugin install beacon@claude-code-beacon-plugin
 
 ## Commands
 
+Beacon indexes your codebase automatically on session start and re-embeds files as you edit — no manual steps needed.
+
+#### Search
+
 | Command | Description |
 |---------|-------------|
 | `/search-code` | Hybrid code search — semantic + keyword + BM25 matching |
-| `/index` | Visual overview of Beacon index — files, chunks, coverage, provider |
-| `/index-status` | Show index health — file count, chunk count, last sync |
-| `/reindex` | Force a full re-index (escape hatch if index gets corrupted) |
-| `/run-indexer` | Manually trigger indexing (useful when auto-index is off) |
-| `/terminate-indexer` | Kill a running sync process and clean up state |
+
+#### Index
+
+| Command | Description |
+|---------|-------------|
+| `/index` | Visual overview — files, chunks, coverage, provider |
+| `/index-status` | Quick health check — file count, chunk count, last sync |
+| `/reindex` | Force full re-index from scratch |
+| `/run-indexer` | Manually trigger indexing |
+| `/terminate-indexer` | Kill a running sync process |
+
+#### Config
+
+| Command | Description |
+|---------|-------------|
 | `/config` | View and modify Beacon configuration |
 | `/blacklist` | Prevent indexing of specific directories |
-| `/whitelist` | Allow indexing in directories that would otherwise be blacklisted |
+| `/whitelist` | Allow indexing in otherwise-blacklisted directories |
 
-Beacon also provides a **code-explorer** agent for deep codebase exploration and a **semantic-code-search** skill that Claude can invoke automatically.
+Beacon also provides a **code-explorer** agent and a **semantic-code-search** skill that Claude can invoke automatically.
 
 <details>
 <summary><strong>Why Beacon?</strong></summary>
