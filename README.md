@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="#quick-start">Quick Start</a> · <a href="#commands">Commands</a> · <a href="#embedding-providers">Providers</a> · <a href="#configuration">Config</a>
+  <a href="#quick-start">Quick Start</a> · <a href="#embedding-models">Models</a> · <a href="#commands">Commands</a> · <a href="#configuration">Config</a>
 </p>
 
 ---
@@ -45,6 +45,114 @@ claude plugin install beacon@claude-code-beacon-plugin
 
 # Restart Claude Code — Beacon indexes automatically
 ```
+
+## Embedding Models
+
+Beacon runs on **open-source models by default** — no API keys, no cloud costs, fully local via [Ollama](https://ollama.com).
+
+| Model | Dims | Context | Speed | Best for |
+|-------|------|---------|-------|----------|
+| **nomic-embed-text** (default) | 768 | 8192 | Fast | General-purpose, great code search |
+| **mxbai-embed-large** | 1024 | 512 | Fast | Higher accuracy, larger vectors |
+| **snowflake-arctic-embed:l** | 1024 | 512 | Medium | Strong retrieval benchmarks |
+| **all-minilm** | 384 | 512 | Very fast | Lightweight, low resource usage |
+
+To switch models, pull with Ollama and update your config:
+
+```bash
+ollama pull mxbai-embed-large
+```
+
+```json
+// .claude/beacon.json
+{
+  "embedding": {
+    "model": "mxbai-embed-large",
+    "dimensions": 1024,
+    "query_prefix": ""
+  }
+}
+```
+
+Then run `/reindex` to rebuild with the new model.
+
+### Cloud Providers
+
+For cloud-hosted embeddings, create `.claude/beacon.json` in your repo:
+
+<details>
+<summary><strong>OpenAI</strong></summary>
+
+```bash
+export OPENAI_API_KEY="sk-..."
+```
+
+```json
+{
+  "embedding": {
+    "api_base": "https://api.openai.com/v1",
+    "model": "text-embedding-3-small",
+    "api_key_env": "OPENAI_API_KEY",
+    "dimensions": 1536,
+    "batch_size": 100,
+    "query_prefix": ""
+  }
+}
+```
+
+</details>
+
+<details>
+<summary><strong>Voyage AI</strong></summary>
+
+```bash
+export VOYAGE_API_KEY="pa-..."
+```
+
+```json
+{
+  "embedding": {
+    "api_base": "https://api.voyageai.com/v1",
+    "model": "voyage-code-3",
+    "api_key_env": "VOYAGE_API_KEY",
+    "dimensions": 1024,
+    "batch_size": 50,
+    "query_prefix": ""
+  }
+}
+```
+
+</details>
+
+<details>
+<summary><strong>LiteLLM proxy</strong> (Vertex AI, Bedrock, Azure, etc.)</summary>
+
+```bash
+pip install litellm
+litellm --model vertex_ai/text-embedding-004 --port 4000
+```
+
+```json
+{
+  "embedding": {
+    "api_base": "http://localhost:4000/v1",
+    "model": "vertex_ai/text-embedding-004",
+    "api_key_env": "LITELLM_API_KEY",
+    "dimensions": 1024,
+    "batch_size": 50,
+    "query_prefix": ""
+  }
+}
+```
+
+</details>
+
+<details>
+<summary><strong>Custom endpoint</strong></summary>
+
+Any server implementing the OpenAI `/v1/embeddings` API will work. Set `api_base`, `model`, `dimensions`, and optionally `api_key_env` in `.claude/beacon.json`.
+
+</details>
 
 ## Commands
 
@@ -83,75 +191,6 @@ Beacon also provides a **code-explorer** agent and a **semantic-code-search** sk
 - **Stays in sync automatically** — hooks handle full index, incremental re-embedding on edits, and garbage collection
 - **Works with any embedding provider** — Ollama (local/free), OpenAI, Voyage AI, LiteLLM, or any OpenAI-compatible API
 - **Gives Claude better context** — slash commands, a code-explorer agent, and a grep-nudge hook for smarter search
-
-</details>
-
-<details>
-<summary><strong>Embedding Providers</strong></summary>
-
-Beacon defaults to **Ollama** (local, free, no API key needed). For cloud providers, create `.claude/beacon.json` in your repo:
-
-#### OpenAI
-
-```bash
-export OPENAI_API_KEY="sk-..."
-```
-
-```json
-{
-  "embedding": {
-    "api_base": "https://api.openai.com/v1",
-    "model": "text-embedding-3-small",
-    "api_key_env": "OPENAI_API_KEY",
-    "dimensions": 1536,
-    "batch_size": 100,
-    "query_prefix": ""
-  }
-}
-```
-
-#### Voyage AI
-
-```bash
-export VOYAGE_API_KEY="pa-..."
-```
-
-```json
-{
-  "embedding": {
-    "api_base": "https://api.voyageai.com/v1",
-    "model": "voyage-code-3",
-    "api_key_env": "VOYAGE_API_KEY",
-    "dimensions": 1024,
-    "batch_size": 50,
-    "query_prefix": ""
-  }
-}
-```
-
-#### LiteLLM proxy (Vertex AI, Bedrock, Azure, etc.)
-
-```bash
-pip install litellm
-litellm --model vertex_ai/text-embedding-004 --port 4000
-```
-
-```json
-{
-  "embedding": {
-    "api_base": "http://localhost:4000/v1",
-    "model": "vertex_ai/text-embedding-004",
-    "api_key_env": "LITELLM_API_KEY",
-    "dimensions": 1024,
-    "batch_size": 50,
-    "query_prefix": ""
-  }
-}
-```
-
-#### Custom endpoint
-
-Any server implementing the OpenAI `/v1/embeddings` API will work. Set `api_base`, `model`, `dimensions`, and optionally `api_key_env` in `.claude/beacon.json`.
 
 </details>
 
