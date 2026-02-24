@@ -1,6 +1,7 @@
 ---
-name: semantic-code-search
-description: "Primary code search for this repo — hybrid search (semantic + keyword + BM25) that outperforms grep on all query types including keyword lookups (98% vs 85% accuracy). Grep is automatically intercepted and redirected to Beacon for most queries. Grep only passes through for: regex patterns, dotted identifiers, path-like patterns, string literal counting, short patterns (<=3 chars), within-file searches, content output mode, quoted string literals, annotations/markers (TODO/FIXME/@param), or URL-like patterns."
+name: semantic-search
+description: "Primary code search — hybrid semantic + keyword + BM25 matching. Automatically intercepted as default search when Beacon index is healthy."
+allowed-tools: [Bash, Read]
 ---
 
 # Hybrid Code Search (Beacon)

@@ -384,8 +384,8 @@ export class BeaconDatabase {
         endLine: r.end_line,
         bm25Score: r.bm25_rank,
       }));
-    } catch {
-      // FTS query syntax error — fall back gracefully
+    } catch (err) {
+      console.error(`Beacon: FTS query failed (${ftsQuery}): ${err.message}`);
       return [];
     }
   }

@@ -37,7 +37,20 @@ export function loadConfig() {
     merged.storage.path = path.join(getRepoRoot(), merged.storage.path);
   }
 
+  validateConfig(merged);
   return merged;
+}
+
+function validateConfig(config) {
+  if (!config.embedding?.dimensions || config.embedding.dimensions <= 0) {
+    throw new Error('embedding.dimensions must be a positive number');
+  }
+  if (!config.chunking?.max_tokens || config.chunking.max_tokens <= 0) {
+    throw new Error('chunking.max_tokens must be a positive number');
+  }
+  if (!config.embedding?.api_base) {
+    throw new Error('embedding.api_base is required');
+  }
 }
 
 function deepMerge(target, source) {

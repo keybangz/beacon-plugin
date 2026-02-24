@@ -1,5 +1,6 @@
 ---
 description: Manage Beacon indexing whitelist — allow indexing in specific directories that would otherwise be blacklisted
+argument-hint: "[show | add [path] | remove <path> | clear]"
 allowed-tools: [Bash]
 ---
 

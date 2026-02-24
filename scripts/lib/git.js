@@ -33,6 +33,7 @@ function walkDirectory(dir, baseDir = dir, maxFiles = 10000, counter = { count: 
     if (SKIP_DIRS.has(entry.name)) continue;
     if (entry.name.startsWith('.') && entry.isDirectory()) continue;
 
+    if (entry.isSymbolicLink()) continue;
     const fullPath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       results.push(...walkDirectory(fullPath, baseDir, maxFiles, counter));

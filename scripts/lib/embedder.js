@@ -10,7 +10,11 @@ export class Embedder {
   constructor(config) {
     this.apiBase = config.embedding.api_base;
     this.model = config.embedding.model;
-    this.apiKey = process.env[config.embedding.api_key_env] || '';
+    const envKey = config.embedding.api_key_env;
+    this.apiKey = envKey ? (process.env[envKey] || '') : '';
+    if (envKey && !process.env[envKey]) {
+      console.warn(`Beacon: api_key_env="${envKey}" is set but the env var is not defined.`);
+    }
     this.dimensions = config.embedding.dimensions;
     this.batchSize = config.embedding.batch_size;
     this.queryPrefix = config.embedding.query_prefix || '';
@@ -23,6 +27,7 @@ export class Embedder {
     for (const batch of batches) {
       const response = await fetch(`${this.apiBase}/embeddings`, {
         method: 'POST',
+        signal: AbortSignal.timeout(30_000),
         headers: {
           'Content-Type': 'application/json',
           ...(this.apiKey && { 'Authorization': `Bearer ${this.apiKey}` })

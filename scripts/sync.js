@@ -54,14 +54,14 @@ try {
 } catch (err) {
   console.error(`Beacon: failed to open database: ${err.message}`);
   deletePidFile();
-  process.exit(0);
+  process.exit(1);
 }
 
 // Stale state auto-recovery: if sync was in_progress and started >5 min ago, clear it
 const staleProgress = db.getSyncProgress();
 if (staleProgress.sync_status === 'in_progress' && staleProgress.sync_started_at) {
   const elapsed = Date.now() - new Date(staleProgress.sync_started_at).getTime();
-  if (elapsed > 5 * 60 * 1000) {
+  if (elapsed < 0 || elapsed > 5 * 60 * 1000) {
     console.log('Beacon: clearing stale sync state (previous sync timed out or was killed).');
     db.clearSyncProgress();
     db.setSyncState('sync_status', 'idle');
@@ -77,7 +77,7 @@ if (!dimCheck.ok) {
   db.setSyncState('sync_error', `Dimension mismatch: stored=${dimCheck.stored}, config=${dimCheck.current}`);
   db.close();
   deletePidFile();
-  process.exit(0);
+  process.exit(0); // exit 0 — don't block the session for a config issue
 }
 
 const embedder = new Embedder(config);
@@ -91,7 +91,7 @@ if (!health.ok) {
   db.setSyncState('sync_error', `Embedding endpoint unreachable: ${health.error}`);
   db.close();
   deletePidFile();
-  process.exit(0); // exit gracefully — don't block the session
+  process.exit(0); // exit 0 — don't block the session when embedder is down
 }
 
 try {
@@ -113,6 +113,7 @@ try {
     const maxFiles = config.indexing.max_files || 10000;
     const allFiles = getRepoFiles(maxFiles).filter(f => shouldIndex(f, config));
     let indexed = 0;
+    let failed = 0;
 
     db.setSyncState('sync_total_files', String(allFiles.length));
     db.setSyncState('sync_completed_files', '0');
@@ -126,9 +127,11 @@ try {
         if (indexed % 50 === 0) console.log(`Beacon: indexed ${indexed}/${allFiles.length} files...`);
       } catch (err) {
         console.error(`Beacon: failed to index ${filePath}: ${err.message}`);
+        failed++;
       }
     }
 
+    if (failed > 0) console.warn(`Beacon: ${failed} file(s) failed to index.`);
     console.log(`Beacon: initial index complete — ${indexed} files, ${db.getStats().chunkCount} chunks`);
   } else {
     // ── INCREMENTAL SYNC: only changed files ──
@@ -144,6 +147,7 @@ try {
       db.setSyncState('sync_total_files', String(changedFiles.length));
       db.setSyncState('sync_completed_files', '0');
       let completedCount = 0;
+      let failed = 0;
 
       for (const filePath of changedFiles) {
         db.setSyncState('sync_current_file', filePath);
@@ -159,6 +163,7 @@ try {
             }
           } catch (err) {
             console.error(`Beacon: failed to sync ${filePath}: ${err.message}`);
+            failed++;
           }
         }
 
@@ -166,6 +171,7 @@ try {
         db.setSyncState('sync_completed_files', String(completedCount));
       }
 
+      if (failed > 0) console.warn(`Beacon: ${failed} file(s) failed to sync.`);
       console.log(`Beacon: sync complete — ${changedFiles.length} files updated`);
     }
   }

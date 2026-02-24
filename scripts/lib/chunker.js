@@ -94,7 +94,7 @@ function fixedChunk(content, maxTokens, overlapTokens) {
       }
       currentChunk = overlapLines;
       currentLen = overlapLen;
-      startLine = i + 1 - overlapLines.length + 1;
+      startLine = Math.max(1, i + 1 - overlapLines.length + 1);
     }
   }
 

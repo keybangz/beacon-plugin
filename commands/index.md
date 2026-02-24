@@ -1,5 +1,6 @@
 ---
 description: Visual overview of Beacon index — chunks, coverage, provider. Pass --files to list indexed files.
+argument-hint: "[--files]"
 allowed-tools: [Bash]
 ---
 

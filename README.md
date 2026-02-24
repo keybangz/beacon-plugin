@@ -25,12 +25,6 @@
 
 ---
 
-## Demo
-
-<!-- User will insert demo content here -->
-
----
-
 ## Quick Start
 
 ```bash
@@ -182,7 +176,7 @@ Beacon indexes your codebase automatically on session start and re-embeds files 
 | `/blacklist` | Prevent indexing of specific directories |
 | `/whitelist` | Allow indexing in otherwise-blacklisted directories |
 
-Beacon also provides a **code-explorer** agent and a **semantic-code-search** skill that Claude can invoke automatically.
+Beacon also provides a **code-explorer** agent and a **semantic-search** skill that Claude can invoke automatically.
 
 <details>
 <summary><strong>Why Beacon?</strong></summary>
@@ -205,7 +199,7 @@ Beacon uses Claude Code [hooks](https://docs.anthropic.com/en/docs/claude-code/h
 | **PostToolUse** | `Write`, `Edit`, `MultiEdit` | Re-embeds the changed file |
 | **PostToolUse** | `Bash` | Garbage collects embeddings for deleted files |
 | **PreCompact** | Before context compaction | Injects index status so search capability survives compaction |
-| **PreToolUse** | `Grep` | Nudges Claude toward Beacon when grep is used for semantic-style queries |
+| **PreToolUse** | `Grep` | Intercepts grep and redirects to Beacon for semantic-style queries |
 
 </details>
 
