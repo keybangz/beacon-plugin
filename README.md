@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="#quick-start">Quick Start</a> · <a href="#embedding-models">Models</a> · <a href="#commands">Commands</a> · <a href="#configuration">Config</a>
+  <a href="#quick-start">Quick Start</a> · <a href="#embedding-models">Models</a> · <a href="#commands">Commands</a> · <a href="#configuration">Config</a> · <a href="EXAMPLES.md">Examples</a>
 </p>
 
 ---
@@ -326,6 +326,10 @@ Things to look for:
 Run `/search-code` with a test query to confirm search is working. If results include `"FTS-only"` in debug output, the embedding server is unreachable — search still works but without semantic matching (keyword/BM25 only).
 
 </details>
+
+## Examples
+
+See [EXAMPLES.md](EXAMPLES.md) for real-world use cases — intent-based search, codebase navigation, identifier tracking, and auto-sync — each with concrete before/after comparisons.
 
 ## License
 
