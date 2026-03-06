@@ -5,8 +5,8 @@
 <h1 align="center">Beacon</h1>
 
 <p align="center">
-  <strong>Semantic code search for <a href="https://docs.anthropic.com/en/docs/claude-code">Claude Code</a></strong><br>
-  Find code by meaning, not just string matching.
+  <strong>Turn Claude Code into Cursor.</strong><br>
+  Semantic code search that understands your codebase — find code by meaning, not just string matching.
 </p>
 
 <p align="center">
@@ -27,18 +27,32 @@
 
 ## Quick Start
 
+### 1. Install Ollama (local embeddings, free)
+
 ```bash
-# Install Ollama (local embeddings, free)
 brew install ollama
 ollama serve &
 ollama pull nomic-embed-text
+```
 
-# Install Beacon plugin
+### 2. Install the Beacon plugin
+
+```bash
 claude plugin marketplace add sagarmk/Claude-Code-Beacon-Plugin
 claude plugin install beacon@claude-code-beacon-plugin
-
-# Restart Claude Code — Beacon indexes automatically
 ```
+
+### 3. Start Claude Code
+
+```bash
+claude
+```
+
+That's it. On first session start, Beacon will:
+1. **Install npm dependencies automatically** (native modules like `better-sqlite3` — takes a few seconds)
+2. **Index your codebase** in the background
+
+No `npm install`, no manual setup. Just install and go.
 
 ## Usage
 
@@ -281,7 +295,7 @@ Beacon uses Claude Code [hooks](https://docs.anthropic.com/en/docs/claude-code/h
 
 | Hook | Trigger | What it does |
 |------|---------|-------------|
-| **SessionStart** | Every session | Full index on first run, diff-based catch-up on subsequent runs |
+| **SessionStart** | Every session | Ensures npm deps are installed (first run only), then full index or diff-based catch-up |
 | **PostToolUse** | `Write`, `Edit`, `MultiEdit` | Re-embeds the changed file |
 | **PostToolUse** | `Bash` | Garbage collects embeddings for deleted files |
 | **PreCompact** | Before context compaction | Injects index status so search capability survives compaction |

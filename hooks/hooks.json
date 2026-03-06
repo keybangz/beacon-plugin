@@ -19,6 +19,12 @@
         "hooks": [
           {
             "type": "command",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/ensure-deps.js",
+            "timeout": 180,
+            "description": "Beacon: ensure npm dependencies are installed (first run only)"
+          },
+          {
+            "type": "command",
             "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/sync.js",
             "timeout": 300,
             "async": true,
