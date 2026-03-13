@@ -2,7 +2,7 @@
 
 **Turn OpenCode into Cursor** — Semantic code search that understands your codebase. Find code by meaning, not just string matching.
 
-This is a complete port of the Beacon plugin from Claude Code to OpenCode, featuring hybrid search (semantic embeddings + BM25 keyword matching + identifier boosting).
+Beacon is a semantic search plugin for OpenCode, featuring hybrid search (semantic embeddings + BM25 keyword matching + identifier boosting).
 
 ## Features
 
@@ -47,6 +47,22 @@ Or install from npm once published:
   "plugins": ["opencode-beacon"]
 }
 ```
+
+### 4. Search Your Code
+
+```bash
+# Initialize index
+opencode reindex
+
+# Search semantically
+opencode search "authentication flow"
+```
+
+## Documentation
+
+- **[SETUP_OPENCODE.md](./SETUP_OPENCODE.md)** — Complete setup and usage guide for installing Beacon with OpenCode
+- **[AI_MODELS_USING_BEACON.md](./AI_MODELS_USING_BEACON.md)** — How AI assistants automatically use Beacon without test scripts
+- **[EXAMPLES.md](./EXAMPLES.md)** — Real-world usage examples and workflows
 
 ### 4. Start OpenCode
 
@@ -285,6 +301,5 @@ Contributions welcome! Please ensure:
 
 ## Related
 
-- [Beacon for Claude Code](https://github.com/sagarmk/Claude-Code-Beacon-Plugin) — Original plugin
 - [OpenCode Docs](https://opencode.ai/docs) — OpenCode documentation
 - [Ollama](https://ollama.com) — Local LLMs and embeddings

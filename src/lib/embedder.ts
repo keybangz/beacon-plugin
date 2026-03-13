@@ -3,7 +3,7 @@
  * Handles requests to embedding services with retry logic and error handling
  */
 
-import type { EmbeddingConfig, EmbedderResult, EmbedderEmbedding } from "./types.ts";
+import type { EmbeddingConfig, EmbedderResult, EmbedderEmbedding } from "./types.js";
 
 /**
  * Embedder class handles communication with embedding API

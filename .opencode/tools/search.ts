@@ -1,10 +1,15 @@
 /**
  * Beacon Search Tool for OpenCode
  * Performs hybrid semantic + keyword + identifier-boosted search
- * Replaces: /search-code command from Claude Code version
  */
 
 import { tool } from "@opencode-ai/plugin";
+import { getRepoRoot } from "../../src/lib/repo-root.ts";
+import { loadConfig } from "../../src/lib/config.ts";
+import { openDatabase } from "../../src/lib/db.ts";
+import { Embedder } from "../../src/lib/embedder.ts";
+import { join } from "path";
+import { existsSync } from "fs";
 
 export default tool({
   description:
@@ -30,16 +35,79 @@ export default tool({
   },
   async execute(args, context): Promise<string> {
     try {
-      // TODO: Implement search execution
-      // This will call the database search function with proper result formatting
-      return JSON.stringify({
-        status: "placeholder",
-        message:
-          "Search tool initialized (database integration coming soon)",
-        query: args.query,
-        topK: args.topK ?? 10,
-        threshold: args.threshold ?? 0.35,
-      });
+      const repoRoot = getRepoRoot(context.worktree);
+      const config = loadConfig(repoRoot);
+      
+      const dbPath = join(repoRoot, config.storage.path, "embeddings.db");
+      
+      if (!existsSync(dbPath)) {
+        return JSON.stringify({
+          error: "Index not found. Run 'reindex' tool to create the index.",
+          matches: [],
+        });
+      }
+
+      const db = openDatabase(dbPath, config.embedding.dimensions);
+      
+      try {
+        // Check dimensions match
+        const dimCheck = db.checkDimensions();
+        if (!dimCheck.ok) {
+          return JSON.stringify({
+            error: `Dimension mismatch: DB has ${dimCheck.stored}d but config specifies ${dimCheck.current}d`,
+            matches: [],
+          });
+        }
+
+        const embedder = new Embedder(config.embedding);
+        
+        // Try to embed the query
+        let results;
+        try {
+          const queryWithPrefix = (config.embedding.query_prefix || "") + args.query;
+          const embedding = await embedder.embedDocuments([queryWithPrefix]);
+          
+          results = db.search(
+            embedding[0],
+            args.topK ?? 10,
+            args.threshold ?? 0.35,
+            args.query,
+            config,
+            args.pathPrefix
+          );
+        } catch (embedError: unknown) {
+          // Fallback to FTS-only search
+          const embedErrorMsg = embedError instanceof Error ? embedError.message : String(embedError);
+          results = db.ftsOnlySearch(
+            args.query,
+            args.topK ?? 10,
+            args.pathPrefix
+          );
+          
+          return JSON.stringify({
+            warning: `Embedding server unavailable (${embedErrorMsg}), using keyword search`,
+            matches: results.map((r) => ({
+              file: r.filePath,
+              lines: `${r.startLine}-${r.endLine}`,
+              similarity: r.similarity.toFixed(3),
+              preview: r.chunkText.slice(0, 300),
+              _note: r._note,
+            })),
+          });
+        }
+
+        return JSON.stringify({
+          query: args.query,
+          matches: results.map((r) => ({
+            file: r.filePath,
+            lines: `${r.startLine}-${r.endLine}`,
+            similarity: r.similarity.toFixed(3),
+            preview: r.chunkText.slice(0, 300),
+          })),
+        });
+      } finally {
+        db.close();
+      }
     } catch (error: unknown) {
       const errorMessage =
         error instanceof Error ? error.message : String(error);

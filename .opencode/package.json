@@ -1,7 +1,10 @@
 {
   "dependencies": {
+    "@opencode-ai/plugin": "1.2.25",
+    "@opencode-ai/sdk": "1.2.25",
     "better-sqlite3": "^11.10.0",
     "picomatch": "^4.0.0",
-    "sqlite-vec": "^0.1.0"
+    "sqlite-vec": "^0.1.0",
+    "zod": "^3.22.0"
   }
 }

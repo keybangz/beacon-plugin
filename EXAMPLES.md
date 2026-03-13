@@ -1,6 +1,6 @@
 # Beacon — Example Use Cases
 
-Real-world scenarios showing how Beacon improves code search inside Claude Code. All examples use a fictional Express e-commerce API (`shopwave`) to keep things concrete.
+Real-world scenarios showing how Beacon improves code search in OpenCode. All examples use a fictional Express e-commerce API (`shopwave`) to keep things concrete.
 
 ---
 
@@ -134,7 +134,7 @@ If you forget step 2, the new code doesn't exist in the index and search returns
 ### With Beacon
 
 ```
-# You write the new file in Claude Code
+# You write a new file
 > Edit src/middleware/rateLimiter.ts
 
 # Beacon's PostToolUse hook re-embeds the file automatically (~200ms)
@@ -147,4 +147,4 @@ If you forget step 2, the new code doesn't exist in the index and search returns
 
 No manual step. Beacon's hooks detect the edit, re-embed the changed file, and update the index — all before your next search.
 
-**Why it matters:** Beacon hooks into Claude Code's tool lifecycle. Every `Write`, `Edit`, and file deletion triggers an automatic index update, so search results are always current without any manual rebuilds.
+**Why it matters:** Beacon hooks into Claude Code's tool lifecycle. Every file changes are automatically re-indexed.

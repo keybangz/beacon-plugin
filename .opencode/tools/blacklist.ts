@@ -1,10 +1,48 @@
 /**
  * Beacon Blacklist Tool for OpenCode
  * Manage directories excluded from indexing
- * Replaces: /blacklist command from Claude Code version
+
  */
 
 import { tool } from "@opencode-ai/plugin";
+import { getRepoRoot } from "../../src/lib/repo-root.ts";
+import { join } from "path";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
+
+const BLACKLIST_FILE = ".opencode/blacklist.json";
+
+/**
+ * Load blacklist from file
+ */
+function loadBlacklist(repoRoot: string): string[] {
+  const blacklistPath = join(repoRoot, BLACKLIST_FILE);
+
+  if (!existsSync(blacklistPath)) {
+    return [];
+  }
+
+  try {
+    const content = readFileSync(blacklistPath, "utf-8");
+    const data = JSON.parse(content);
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Save blacklist to file
+ */
+function saveBlacklist(repoRoot: string, patterns: string[]): void {
+  const blacklistPath = join(repoRoot, BLACKLIST_FILE);
+  const dir = join(repoRoot, ".opencode");
+
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
+  }
+
+  writeFileSync(blacklistPath, JSON.stringify(patterns, null, 2), "utf-8");
+}
 
 export default tool({
   description:
@@ -19,20 +57,85 @@ export default tool({
       .optional()
       .describe("Directory path to add or remove from blacklist"),
   },
-  async execute(args, context): Promise<string> {
+  async execute(args: any, context: any): Promise<string> {
     try {
-      // TODO: Implement blacklist management
-      // This will:
-      // 1. Read .opencode/blacklist.json
-      // 2. Add/remove paths as requested
-      // 3. Re-validate after changes
-      return JSON.stringify({
-        status: "placeholder",
-        message:
-          "Blacklist tool initialized (database integration coming soon)",
-        action: args.action ?? "list",
-        path: args.path,
-      });
+      const repoRoot = getRepoRoot(context.worktree);
+      const action = args.action ?? "list";
+
+      if (action === "list") {
+        const patterns = loadBlacklist(repoRoot);
+
+        return JSON.stringify({
+          status: "success",
+          action: "list",
+          patterns,
+          count: patterns.length,
+        });
+      } else if (action === "add") {
+        if (!args.path) {
+          return JSON.stringify({
+            error: "Path is required for 'add' action",
+          });
+        }
+
+        const patterns = loadBlacklist(repoRoot);
+
+        if (patterns.includes(args.path)) {
+          return JSON.stringify({
+            status: "warning",
+            message: "Pattern already exists in blacklist",
+            pattern: args.path,
+            patterns,
+          });
+        }
+
+        patterns.push(args.path);
+        patterns.sort();
+        saveBlacklist(repoRoot, patterns);
+
+        return JSON.stringify({
+          status: "success",
+          action: "add",
+          message: "Pattern added to blacklist",
+          pattern: args.path,
+          patterns,
+          count: patterns.length,
+        });
+      } else if (action === "remove") {
+        if (!args.path) {
+          return JSON.stringify({
+            error: "Path is required for 'remove' action",
+          });
+        }
+
+        const patterns = loadBlacklist(repoRoot);
+        const initialCount = patterns.length;
+        const filteredPatterns = patterns.filter((p) => p !== args.path);
+
+        if (initialCount === filteredPatterns.length) {
+          return JSON.stringify({
+            status: "warning",
+            message: "Pattern not found in blacklist",
+            pattern: args.path,
+            patterns: filteredPatterns,
+          });
+        }
+
+        saveBlacklist(repoRoot, filteredPatterns);
+
+        return JSON.stringify({
+          status: "success",
+          action: "remove",
+          message: "Pattern removed from blacklist",
+          pattern: args.path,
+          patterns: filteredPatterns,
+          count: filteredPatterns.length,
+        });
+      } else {
+        return JSON.stringify({
+          error: `Unknown action: ${action}`,
+        });
+      }
     } catch (error: unknown) {
       const errorMessage =
         error instanceof Error ? error.message : String(error);

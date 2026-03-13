@@ -5,7 +5,7 @@
 
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
-import { getRepoRoot } from "./repo-root.ts";
+import { getRepoRoot } from "./repo-root.js";
 
 /**
  * Default blacklist paths (sensitive directories)

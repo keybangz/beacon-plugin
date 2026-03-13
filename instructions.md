@@ -30,7 +30,8 @@ applyTo: "**"
 
 ## Project-Specific Guidelines
 
-This is a Claude Code plugin we are going to be completely redeveloping for OpenCode, we must make sure agents automatically use the finished plugin, and use it correctly.
+This is an OpenCode plugin for semantic code search with hybrid search capabilities (vector embeddings + BM25 + identifier boosting).
+
 
 ## AI Code Generation Preferences
 

@@ -3,10 +3,10 @@
  * Loads default config, merges with per-repo overrides
  */
 
-import { readFileSync } from "fs";
-import { existsSync, join } from "path";
-import type { BeaconConfig, MergedConfig } from "./types.ts";
-import { getRepoRoot } from "./repo-root.ts";
+import { readFileSync, existsSync } from "fs";
+import { join } from "path";
+import type { BeaconConfig, MergedConfig } from "./types.js";
+import { getRepoRoot } from "./repo-root.js";
 
 /**
  * Deep merge two objects recursively
@@ -14,16 +14,16 @@ import { getRepoRoot } from "./repo-root.ts";
  * @param source - Override configuration object
  * @returns Merged configuration
  */
-function deepMerge<T extends Record<string, unknown>>(
-  target: T,
-  source: Partial<T>
-): T {
-  const result: T = { ...target };
+function deepMerge(
+  target: BeaconConfig,
+  source: Partial<BeaconConfig>
+): BeaconConfig {
+  const result = JSON.parse(JSON.stringify(target)) as BeaconConfig;
 
   for (const key in source) {
     if (Object.prototype.hasOwnProperty.call(source, key)) {
-      const sourceValue = source[key];
-      const targetValue = result[key];
+      const sourceValue = source[key as keyof BeaconConfig];
+      const targetValue = result[key as keyof BeaconConfig];
 
       // Recursively merge nested objects
       if (
@@ -34,12 +34,47 @@ function deepMerge<T extends Record<string, unknown>>(
         typeof targetValue === "object" &&
         !Array.isArray(targetValue)
       ) {
-        result[key] = deepMerge(
+        (result[key as keyof BeaconConfig] as unknown) = deepMergeObjects(
+          targetValue as unknown as Record<string, unknown>,
+          sourceValue as unknown as Record<string, unknown>
+        );
+      } else if (sourceValue !== undefined && sourceValue !== null) {
+        (result[key as keyof BeaconConfig] as unknown) = sourceValue;
+      }
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Helper to deep merge plain objects
+ */
+function deepMergeObjects(
+  target: Record<string, unknown>,
+  source: Record<string, unknown>
+): Record<string, unknown> {
+  const result = { ...target };
+
+  for (const key in source) {
+    if (Object.prototype.hasOwnProperty.call(source, key)) {
+      const sourceValue = source[key];
+      const targetValue = result[key];
+
+      if (
+        sourceValue !== null &&
+        typeof sourceValue === "object" &&
+        !Array.isArray(sourceValue) &&
+        targetValue !== null &&
+        typeof targetValue === "object" &&
+        !Array.isArray(targetValue)
+      ) {
+        result[key] = deepMergeObjects(
           targetValue as Record<string, unknown>,
           sourceValue as Record<string, unknown>
-        ) as T[Extract<keyof T, string>];
-      } else {
-        result[key] = sourceValue as T[Extract<keyof T, string>];
+        );
+      } else if (sourceValue !== undefined && sourceValue !== null) {
+        result[key] = sourceValue;
       }
     }
   }

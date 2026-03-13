@@ -3,10 +3,9 @@
  * Handles file discovery, hashing, and diff detection
  */
 
-import { execSync, spawnSync } from "child_process";
+import { execSync } from "child_process";
 import { createHash } from "crypto";
-import { readFileSync } from "fs";
-import type { ModifiedFile } from "./types.ts";
+import type { ModifiedFile } from "./types.js";
 
 /**
  * Get all files tracked by git in repository
@@ -51,7 +50,8 @@ export function getModifiedFilesSince(
   sinceIso: string
 ): ModifiedFile[] {
   try {
-    const sinceDate: Date = new Date(sinceIso);
+    // Note: sinceIso parameter allows filtering by date, but git diff-index
+    // returns all changed files relative to HEAD regardless
 
     // Use git diff-index to find changed files
     const result: string = execSync(

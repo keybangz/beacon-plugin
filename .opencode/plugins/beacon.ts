@@ -4,6 +4,14 @@
  */
 
 import type { Plugin } from "@opencode-ai/plugin";
+import SearchTool from "../tools/search.ts";
+import IndexTool from "../tools/index.ts";
+import ReindexTool from "../tools/reindex.ts";
+import StatusTool from "../tools/status.ts";
+import ConfigTool from "../tools/config.ts";
+import BlacklistTool from "../tools/blacklist.ts";
+import WhitelistTool from "../tools/whitelist.ts";
+import PerformanceTool from "../tools/performance.ts";
 
 /**
  * Beacon plugin for OpenCode
@@ -21,6 +29,18 @@ export const BeaconPlugin: Plugin = async ({
   worktree,
 }) => {
   return {
+    // Custom tools
+    tool: {
+      search: SearchTool,
+      index: IndexTool,
+      reindex: ReindexTool,
+      status: StatusTool,
+      config: ConfigTool,
+      blacklist: BlacklistTool,
+      whitelist: WhitelistTool,
+      performance: PerformanceTool,
+    },
+
     // Session start hook - initialize indexing
     "session.created": async (input, output) => {
       try {
