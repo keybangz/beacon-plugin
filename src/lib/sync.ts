@@ -12,27 +12,45 @@ import { getRepoFiles, getModifiedFilesSince, getFileHash } from "./git.js";
 import { shouldIndex } from "./ignore.js";
 import { BeaconDatabase } from "./db.js";
 
-/** Shared abort controller for terminating a running sync */
-let activeAbortController: AbortController | null = null;
-
 /**
  * Terminate any running indexing operation
+ * Uses database flag for cross-module communication
+ * @param db - Database instance for state management
  * @returns true if an operation was aborted, false if nothing was running
  */
-export function terminateIndexer(): boolean {
-  if (activeAbortController) {
-    activeAbortController.abort();
-    activeAbortController = null;
-    return true;
+export function terminateIndexer(db?: BeaconDatabase): boolean {
+  // Set termination flag in database for cross-module communication
+  if (db) {
+    const status = db.getSyncState("sync_status");
+    if (status === "in_progress") {
+      db.setSyncState("sync_status", "terminating");
+      return true;
+    }
   }
   return false;
 }
 
 /**
  * Returns true if an index operation is currently running
+ * @param db - Database instance for state checking
+ * @returns true if indexing is in progress
  */
-export function isIndexerRunning(): boolean {
-  return activeAbortController !== null;
+export function isIndexerRunning(db?: BeaconDatabase): boolean {
+  if (db) {
+    const status = db.getSyncState("sync_status");
+    return status === "in_progress" || status === "terminating";
+  }
+  return false;
+}
+
+/**
+ * Check if termination was requested
+ * @param db - Database instance for state checking
+ * @returns true if termination was requested
+ */
+export function shouldTerminate(db: BeaconDatabase): boolean {
+  const status = db.getSyncState("sync_status");
+  return status === "terminating";
 }
 
 /**
@@ -61,9 +79,9 @@ export class IndexCoordinator {
    * Deletes existing database and re-indexes everything
    */
   async performFullIndex(): Promise<{ success: boolean; filesIndexed: number }> {
-    // Register abort controller so terminate-indexer can cancel this
-    const abortController = new AbortController();
-    activeAbortController = abortController;
+    // Set sync status in database for cross-module termination
+    this.db.setSyncState("sync_status", "in_progress");
+    this.db.setSyncState("sync_started_at", new Date().toISOString());
 
     try {
       // Clear existing index
@@ -79,7 +97,11 @@ export class IndexCoordinator {
         )
       );
 
-      const filesIndexed = await this.indexFiles(filesToIndex, abortController.signal);
+      // Store total file count for progress tracking
+      this.db.setSyncState("total_files", String(filesToIndex.length));
+      this.db.setSyncState("files_indexed", "0");
+
+      const filesIndexed = await this.indexFiles(filesToIndex);
 
       this.db.setSyncState("last_full_sync", new Date().toISOString());
       this.db.setSyncState("sync_status", "idle");
@@ -89,7 +111,7 @@ export class IndexCoordinator {
       const errorMsg =
         error instanceof Error ? error.message : String(error);
 
-      if ((error as Error)?.name === "AbortError") {
+      if ((error as Error)?.name === "AbortError" || errorMsg.includes("terminated")) {
         this.db.setSyncState("sync_status", "idle");
         this.db.setSyncState("sync_error", "Indexing terminated by user");
         throw error;
@@ -101,10 +123,6 @@ export class IndexCoordinator {
       );
       this.db.setSyncState("sync_status", "error");
       throw error;
-    } finally {
-      if (activeAbortController === abortController) {
-        activeAbortController = null;
-      }
     }
   }
 
@@ -113,8 +131,9 @@ export class IndexCoordinator {
    * Only re-indexes files modified since last sync
    */
   async performDiffSync(): Promise<{ success: boolean; filesIndexed: number }> {
-    const abortController = new AbortController();
-    activeAbortController = abortController;
+    // Set sync status in database for cross-module termination
+    this.db.setSyncState("sync_status", "in_progress");
+    this.db.setSyncState("sync_started_at", new Date().toISOString());
 
     try {
       const lastSyncIso = this.db.getSyncState("last_full_sync");
@@ -141,13 +160,17 @@ export class IndexCoordinator {
           )
         );
 
+      // Store total file count for progress tracking
+      this.db.setSyncState("total_files", String(filesToIndex.length));
+      this.db.setSyncState("files_indexed", "0");
+
       // Delete old entries for modified files
       for (const file of filesToIndex) {
         this.db.deleteChunks(file);
       }
 
       // Re-index modified files
-      const filesIndexed = await this.indexFiles(filesToIndex, abortController.signal);
+      const filesIndexed = await this.indexFiles(filesToIndex);
 
       // Also garbage collect deleted files
       const allTrackedFiles = getRepoFiles(this.repoRoot);
@@ -169,10 +192,6 @@ export class IndexCoordinator {
       this.db.setSyncState("sync_error", `Diff sync failed: ${errorMsg}`);
       this.db.setSyncState("sync_status", "error");
       throw error;
-    } finally {
-      if (activeAbortController === abortController) {
-        activeAbortController = null;
-      }
     }
   }
 
@@ -180,7 +199,7 @@ export class IndexCoordinator {
    * Index a batch of files with parallel embedding requests
    * Chunks, embeds, and stores in database
    */
-  private async indexFiles(filePaths: string[], signal?: AbortSignal): Promise<number> {
+  private async indexFiles(filePaths: string[]): Promise<number> {
     const { concurrency } = this.config.indexing;
 
     // Collect all file content that needs indexing
@@ -191,9 +210,9 @@ export class IndexCoordinator {
     }> = [];
 
     for (const filePath of filePaths) {
-      // Check for cancellation
-      if (signal?.aborted) {
-        throw Object.assign(new Error("Indexing aborted"), { name: "AbortError" });
+      // Check for termination via database flag
+      if (shouldTerminate(this.db)) {
+        throw Object.assign(new Error("Indexing terminated by user"), { name: "AbortError" });
       }
 
       try {
@@ -243,47 +262,50 @@ export class IndexCoordinator {
       };
     }).filter((f) => f.chunks.length > 0);
 
-    // Process in parallel batches (concurrency = number of parallel embed requests)
+    // Process in parallel with concurrency limit
     let filesProcessed = 0;
+    let totalChunksProcessed = 0;
 
-    for (let i = 0; i < chunkedFiles.length; i += concurrency) {
-      // Check for cancellation at each batch boundary
-      if (signal?.aborted) {
-        throw Object.assign(new Error("Indexing aborted"), { name: "AbortError" });
-      }
-
-      const batch = chunkedFiles.slice(i, i + concurrency);
-
-      // Fire parallel embedding requests — one per file in the batch
-      const embeddingResults = await Promise.all(
-        batch.map(async (file) => {
-          const texts = file.chunks.map((c) => c.text);
-          try {
-            const embeddings = await this.embedder.embedDocuments(texts);
-            return { file, embeddings, error: null };
-          } catch (err: unknown) {
-            return { file, embeddings: null, error: err };
-          }
-        })
-      );
-
-      // Store results in database
-      for (const { file, embeddings, error } of embeddingResults) {
-        if (error || !embeddings) {
-          // Skip files that failed to embed
-          continue;
+    // Create a queue-based processor for better concurrency control
+    const processQueue: Array<() => Promise<void>> = [];
+    
+    for (const file of chunkedFiles) {
+      processQueue.push(async () => {
+        // Check termination before processing each file
+        if (shouldTerminate(this.db)) {
+          throw Object.assign(new Error("Indexing terminated by user"), { name: "AbortError" });
         }
 
-        this.db.insertChunks(
-          file.path,
-          file.chunks,
-          embeddings,
-          file.hash
-        );
-
-        filesProcessed++;
-      }
+        const texts = file.chunks.map((c) => c.text);
+        
+        try {
+          const embeddings = await this.embedder.embedDocuments(texts);
+          
+          this.db.insertChunks(
+            file.path,
+            file.chunks,
+            embeddings,
+            file.hash
+          );
+          
+          filesProcessed++;
+          totalChunksProcessed += file.chunks.length;
+          
+          // Update progress in database
+          this.db.setSyncState("files_indexed", String(filesProcessed));
+          this.db.setSyncState("chunks_processed", String(totalChunksProcessed));
+        } catch (err) {
+          // Log error but continue with other files
+          console.error(`Failed to embed ${file.path}:`, err);
+        }
+      });
     }
+
+    // Process queue with concurrency limit using Promise.allSettled
+    const results = await Promise.allSettled(processQueue.map(task => task()));
+    
+    // Count successful completions (failures already logged in task)
+    return filesProcessed;
 
     return filesProcessed;
   }

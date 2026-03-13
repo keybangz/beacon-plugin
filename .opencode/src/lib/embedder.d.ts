@@ -33,14 +33,14 @@ export declare class Embedder {
     embedQuery(text: string): Promise<number[]>;
     /**
      * Truncate text to stay within the embedding model's context window.
-     * Uses a conservative 3-char/token estimate with 90% safety margin
+     * Uses a conservative 3-char/token estimate with 80% safety margin
      * to account for tokenization differences between our estimator and
      * the actual embedding model.
      * This is a last-resort safety net; the chunker should already produce
      * correctly-sized chunks, but oversized inputs to Ollama cause hard
      * "input length exceeds context length" errors that silently drop chunks.
      * @param text - Input text
-     * @param maxTokens - Maximum allowed tokens (will apply 90% safety margin)
+     * @param maxTokens - Maximum allowed tokens (will apply 80% safety margin)
      * @returns Truncated text
      */
     private truncateToContextLimit;

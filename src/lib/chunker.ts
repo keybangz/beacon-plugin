@@ -32,7 +32,7 @@ function estimateTokens(text: string): number {
  * @param code - Source code
  * @param maxTokens - Maximum tokens per chunk
  * @param overlapTokens - Overlap between chunks
- * @param contextLimit - Optional embedding model context limit (applies 90% safety margin)
+ * @param contextLimit - Optional embedding model context limit (applies 80% safety margin)
  * @returns Array of code chunks
  */export function chunkCode(
   code: string,
@@ -41,9 +41,10 @@ function estimateTokens(text: string): number {
   contextLimit?: number
 ): ChunkResult[] {
   // Apply safety margin when context limit is provided
-  // Use the smaller of maxTokens or (contextLimit * 0.9) to account for tokenization differences
+  // Use 80% safety margin to account for tokenization differences between
+  // our character estimate (3 chars/token) and the model's actual BPE tokenizer
   const effectiveMaxTokens = contextLimit !== undefined
-    ? Math.min(maxTokens, Math.floor(contextLimit * 0.9))
+    ? Math.min(maxTokens, Math.floor(contextLimit * 0.8))
     : maxTokens;
   const lines: string[] = code.split("\n");
   const chunks: ChunkResult[] = [];

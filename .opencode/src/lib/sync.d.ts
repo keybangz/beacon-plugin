@@ -7,13 +7,23 @@ import { Embedder } from "./embedder.js";
 import { BeaconDatabase } from "./db.js";
 /**
  * Terminate any running indexing operation
+ * Uses database flag for cross-module communication
+ * @param db - Database instance for state management
  * @returns true if an operation was aborted, false if nothing was running
  */
-export declare function terminateIndexer(): boolean;
+export declare function terminateIndexer(db?: BeaconDatabase): boolean;
 /**
  * Returns true if an index operation is currently running
+ * @param db - Database instance for state checking
+ * @returns true if indexing is in progress
  */
-export declare function isIndexerRunning(): boolean;
+export declare function isIndexerRunning(db?: BeaconDatabase): boolean;
+/**
+ * Check if termination was requested
+ * @param db - Database instance for state checking
+ * @returns true if termination was requested
+ */
+export declare function shouldTerminate(db: BeaconDatabase): boolean;
 /**
  * Index coordinator - orchestrates full and incremental indexing
  */

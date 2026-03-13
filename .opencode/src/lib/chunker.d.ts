@@ -12,7 +12,7 @@ export interface ChunkResult {
  * @param code - Source code
  * @param maxTokens - Maximum tokens per chunk
  * @param overlapTokens - Overlap between chunks
- * @param contextLimit - Optional embedding model context limit (applies 90% safety margin)
+ * @param contextLimit - Optional embedding model context limit (applies 80% safety margin)
  * @returns Array of code chunks
  */ export declare function chunkCode(code: string, maxTokens?: number, overlapTokens?: number, contextLimit?: number): ChunkResult[];
 /**
