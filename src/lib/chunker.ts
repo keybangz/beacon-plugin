@@ -46,6 +46,10 @@ function estimateTokens(text: string): number {
   const effectiveMaxTokens = contextLimit !== undefined
     ? Math.min(maxTokens, Math.floor(contextLimit * 0.8))
     : maxTokens;
+  
+  // Calculate max characters based on effective token limit
+  const maxChars = effectiveMaxTokens * 3;
+  
   const lines: string[] = code.split("\n");
   const chunks: ChunkResult[] = [];
   let currentChunk: string[] = [];
@@ -63,14 +67,26 @@ function estimateTokens(text: string): number {
       chunkTokens + lineTokens > effectiveMaxTokens &&
       currentChunk.join("\n").length > 0
     ) {
-      // Save current chunk
-      const chunkText: string = currentChunk.join("\n");
+      // Save current chunk with character limit enforcement
+      let chunkText: string = currentChunk.join("\n");
       if (chunkText.trim()) {
-        chunks.push({
-          text: chunkText,
-          start_line: chunkStartLine,
-          end_line: i - 1,
-        });
+        // Hard truncate to maxChars as final safety net
+        if (chunkText.length > maxChars) {
+          chunkText = truncateToMaxChars(chunkText, maxChars, chunkStartLine);
+          // Adjust end_line based on truncated content
+          const truncatedLines = chunkText.split("\n");
+          chunks.push({
+            text: chunkText,
+            start_line: chunkStartLine,
+            end_line: chunkStartLine + truncatedLines.length - 1,
+          });
+        } else {
+          chunks.push({
+            text: chunkText,
+            start_line: chunkStartLine,
+            end_line: i - 1,
+          });
+        }
       }
 
       // Prepare overlap for next chunk
@@ -86,17 +102,53 @@ function estimateTokens(text: string): number {
     chunkTokens += lineTokens;
   }
 
-  // Add remaining chunk
+  // Add remaining chunk with character limit enforcement
   if (currentChunk.length > 0 && currentChunk.join("\n").trim()) {
-    chunks.push({
-      text: currentChunk.join("\n"),
-      start_line: chunkStartLine,
-      end_line: lines.length - 1,
-    });
+    let chunkText: string = currentChunk.join("\n");
+    if (chunkText.length > maxChars) {
+      chunkText = truncateToMaxChars(chunkText, maxChars, chunkStartLine);
+      const truncatedLines = chunkText.split("\n");
+      chunks.push({
+        text: chunkText,
+        start_line: chunkStartLine,
+        end_line: chunkStartLine + truncatedLines.length - 1,
+      });
+    } else {
+      chunks.push({
+        text: chunkText,
+        start_line: chunkStartLine,
+        end_line: lines.length - 1,
+      });
+    }
   }
 
   // Ensure chunks don't have start >= end
   return chunks.filter((chunk) => chunk.start_line <= chunk.end_line);
+}
+
+/**
+ * Truncate chunk text to maximum character limit at line or token boundary
+ * Prefers to break at line boundaries, then token boundaries, then hard truncation
+ */
+function truncateToMaxChars(text: string, maxChars: number, startLine: number): string {
+  if (text.length <= maxChars) return text;
+  
+  // Try truncating at line boundaries first
+  const lines = text.split("\n");
+  let result = "";
+  for (const line of lines) {
+    if ((result + line).length > maxChars) {
+      break;
+    }
+    result += (result ? "\n" : "") + line;
+  }
+  
+  // If still too long, truncate at character boundary
+  if (result.length > maxChars) {
+    result = result.slice(0, maxChars);
+  }
+  
+  return result || text.slice(0, maxChars);
 }
 
 /**
