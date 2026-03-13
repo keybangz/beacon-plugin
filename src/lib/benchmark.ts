@@ -5,11 +5,11 @@
  * This tool helps identify bottlenecks and track performance improvements over time
  */
 
-import { openDatabase } from "../lib/db.js";
-import { BeaconConfig } from "../lib/types.js";
-import type { SearchResult } from "../lib/types.js";
-import { Embedder } from "../lib/embedder.js";
-import { PerformanceTimer } from "../lib/cache.js";
+import { openDatabase } from "./db.js";
+import { BeaconConfig } from "./types.js";
+import type { SearchResult } from "./types.js";
+import { Embedder } from "./embedder.js";
+import { PerformanceTimer } from "./cache.js";
 import { readFileSync } from "fs";
 
 interface BenchmarkResult {
@@ -168,16 +168,22 @@ export function generatePerformanceReport(
   report += `${"=".repeat(50)}\n\n`;
 
   // Summary statistics
-  const avgDuration =
-    results.reduce((sum, r) => sum + r.duration, 0) / results.length;
-  const maxDuration = Math.max(...results.map((r) => r.duration));
-  const minDuration = Math.min(...results.map((r) => r.duration));
-
   report += "📊 SUMMARY\n";
   report += `  Operations: ${results.length}\n`;
-  report += `  Avg Duration: ${avgDuration.toFixed(2)}ms\n`;
-  report += `  Min Duration: ${minDuration.toFixed(2)}ms\n`;
-  report += `  Max Duration: ${maxDuration.toFixed(2)}ms\n\n`;
+
+  if (results.length > 0) {
+    const avgDuration =
+      results.reduce((sum, r) => sum + r.duration, 0) / results.length;
+    const maxDuration = Math.max(...results.map((r) => r.duration));
+    const minDuration = Math.min(...results.map((r) => r.duration));
+    report += `  Avg Duration: ${avgDuration.toFixed(2)}ms\n`;
+    report += `  Min Duration: ${minDuration.toFixed(2)}ms\n`;
+    report += `  Max Duration: ${maxDuration.toFixed(2)}ms\n`;
+  } else {
+    report += "  No operations recorded yet.\n";
+  }
+
+  report += "\n";
 
   // Detailed results
   report += "📈 DETAILED RESULTS\n";

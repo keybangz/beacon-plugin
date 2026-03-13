@@ -12,6 +12,29 @@ import { getRepoFiles, getModifiedFilesSince, getFileHash } from "./git.js";
 import { shouldIndex } from "./ignore.js";
 import { BeaconDatabase } from "./db.js";
 
+/** Shared abort controller for terminating a running sync */
+let activeAbortController: AbortController | null = null;
+
+/**
+ * Terminate any running indexing operation
+ * @returns true if an operation was aborted, false if nothing was running
+ */
+export function terminateIndexer(): boolean {
+  if (activeAbortController) {
+    activeAbortController.abort();
+    activeAbortController = null;
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Returns true if an index operation is currently running
+ */
+export function isIndexerRunning(): boolean {
+  return activeAbortController !== null;
+}
+
 /**
  * Index coordinator - orchestrates full and incremental indexing
  */
@@ -38,6 +61,10 @@ export class IndexCoordinator {
    * Deletes existing database and re-indexes everything
    */
   async performFullIndex(): Promise<{ success: boolean; filesIndexed: number }> {
+    // Register abort controller so terminate-indexer can cancel this
+    const abortController = new AbortController();
+    activeAbortController = abortController;
+
     try {
       // Clear existing index
       this.db.clear();
@@ -52,7 +79,7 @@ export class IndexCoordinator {
         )
       );
 
-      const filesIndexed = await this.indexFiles(filesToIndex);
+      const filesIndexed = await this.indexFiles(filesToIndex, abortController.signal);
 
       this.db.setSyncState("last_full_sync", new Date().toISOString());
       this.db.setSyncState("sync_status", "idle");
@@ -61,12 +88,23 @@ export class IndexCoordinator {
     } catch (error: unknown) {
       const errorMsg =
         error instanceof Error ? error.message : String(error);
+
+      if ((error as Error)?.name === "AbortError") {
+        this.db.setSyncState("sync_status", "idle");
+        this.db.setSyncState("sync_error", "Indexing terminated by user");
+        throw error;
+      }
+
       this.db.setSyncState(
         "sync_error",
         `Full index failed: ${errorMsg}`
       );
       this.db.setSyncState("sync_status", "error");
       throw error;
+    } finally {
+      if (activeAbortController === abortController) {
+        activeAbortController = null;
+      }
     }
   }
 
@@ -75,6 +113,9 @@ export class IndexCoordinator {
    * Only re-indexes files modified since last sync
    */
   async performDiffSync(): Promise<{ success: boolean; filesIndexed: number }> {
+    const abortController = new AbortController();
+    activeAbortController = abortController;
+
     try {
       const lastSyncIso = this.db.getSyncState("last_full_sync");
 
@@ -106,7 +147,7 @@ export class IndexCoordinator {
       }
 
       // Re-index modified files
-      const filesIndexed = await this.indexFiles(filesToIndex);
+      const filesIndexed = await this.indexFiles(filesToIndex, abortController.signal);
 
       // Also garbage collect deleted files
       const allTrackedFiles = getRepoFiles(this.repoRoot);
@@ -128,23 +169,33 @@ export class IndexCoordinator {
       this.db.setSyncState("sync_error", `Diff sync failed: ${errorMsg}`);
       this.db.setSyncState("sync_status", "error");
       throw error;
+    } finally {
+      if (activeAbortController === abortController) {
+        activeAbortController = null;
+      }
     }
   }
 
   /**
-   * Index a batch of files
+   * Index a batch of files with parallel embedding requests
    * Chunks, embeds, and stores in database
    */
-  private async indexFiles(filePaths: string[]): Promise<number> {
+  private async indexFiles(filePaths: string[], signal?: AbortSignal): Promise<number> {
     const { concurrency } = this.config.indexing;
-    const batch: Array<{
+
+    // Collect all file content that needs indexing
+    const filesToProcess: Array<{
       path: string;
       content: string;
       hash: string;
     }> = [];
 
-    // Collect all file content
     for (const filePath of filePaths) {
+      // Check for cancellation
+      if (signal?.aborted) {
+        throw Object.assign(new Error("Indexing aborted"), { name: "AbortError" });
+      }
+
       try {
         const fullPath = join(this.repoRoot, filePath);
 
@@ -163,104 +214,73 @@ export class IndexCoordinator {
           continue; // File hasn't changed
         }
 
-        batch.push({ path: filePath, content, hash });
-      } catch (err: unknown) {
+        filesToProcess.push({ path: filePath, content, hash });
+      } catch {
         // Skip files that can't be read
       }
     }
 
-    // Process in batches
+    if (filesToProcess.length === 0) {
+      return 0;
+    }
+
+    // Pre-chunk all files
+    const chunkedFiles = filesToProcess.map((file) => {
+      const chunks = chunkCode(
+        file.content,
+        this.config.chunking.max_tokens,
+        this.config.chunking.overlap_tokens
+      );
+      return {
+        path: file.path,
+        hash: file.hash,
+        chunks: chunks.map((c) => ({
+          text: c.text,
+          start_line: c.start_line,
+          end_line: c.end_line,
+        })),
+      };
+    }).filter((f) => f.chunks.length > 0);
+
+    // Process in parallel batches (concurrency = number of parallel embed requests)
     let filesProcessed = 0;
-    const batchSize = Math.max(1, concurrency); // Use concurrency as batch size
 
-    for (let i = 0; i < batch.length; i += batchSize) {
-      const batchSlice = batch.slice(i, i + batchSize);
+    for (let i = 0; i < chunkedFiles.length; i += concurrency) {
+      // Check for cancellation at each batch boundary
+      if (signal?.aborted) {
+        throw Object.assign(new Error("Indexing aborted"), { name: "AbortError" });
+      }
 
-      // Chunk all files in batch
-      const allChunks: Array<{
-        path: string;
-        chunks: Array<{ text: string; start_line: number; end_line: number }>;
-        hash: string;
-      }> = [];
+      const batch = chunkedFiles.slice(i, i + concurrency);
 
-      for (const file of batchSlice) {
-        const chunks = chunkCode(
-          file.content,
-          this.config.chunking.max_tokens,
-          this.config.chunking.overlap_tokens
+      // Fire parallel embedding requests — one per file in the batch
+      const embeddingResults = await Promise.all(
+        batch.map(async (file) => {
+          const texts = file.chunks.map((c) => c.text);
+          try {
+            const embeddings = await this.embedder.embedDocuments(texts);
+            return { file, embeddings, error: null };
+          } catch (err: unknown) {
+            return { file, embeddings: null, error: err };
+          }
+        })
+      );
+
+      // Store results in database
+      for (const { file, embeddings, error } of embeddingResults) {
+        if (error || !embeddings) {
+          // Skip files that failed to embed
+          continue;
+        }
+
+        this.db.insertChunks(
+          file.path,
+          file.chunks,
+          embeddings,
+          file.hash
         );
 
-        allChunks.push({
-          path: file.path,
-          chunks: chunks.map((c) => ({
-            text: c.text,
-            start_line: c.start_line,
-            end_line: c.end_line,
-          })),
-          hash: file.hash,
-        });
-      }
-
-      // Prepare texts for embedding
-      const textsToEmbed: string[] = [];
-      const chunkMapping: Array<{
-        fileIndex: number;
-        chunkIndex: number;
-      }> = [];
-
-      for (let fileIdx = 0; fileIdx < allChunks.length; fileIdx++) {
-        const file = allChunks[fileIdx];
-
-        for (let chunkIdx = 0; chunkIdx < file.chunks.length; chunkIdx++) {
-          textsToEmbed.push(file.chunks[chunkIdx].text);
-          chunkMapping.push({ fileIndex: fileIdx, chunkIndex: chunkIdx });
-        }
-      }
-
-      // Get embeddings
-      if (textsToEmbed.length > 0) {
-        const embeddings = await this.embedder.embedDocuments(textsToEmbed);
-
-        // Group embeddings by file
-        const embeddingsByFile: Map<
-          number,
-          Array<{
-            chunkIndex: number;
-            embedding: number[];
-          }>
-        > = new Map();
-
-        for (let j = 0; j < embeddings.length; j++) {
-          const { fileIndex, chunkIndex } = chunkMapping[j];
-
-          if (!embeddingsByFile.has(fileIndex)) {
-            embeddingsByFile.set(fileIndex, []);
-          }
-
-          embeddingsByFile.get(fileIndex)!.push({
-            chunkIndex,
-            embedding: embeddings[j],
-          });
-        }
-
-        // Store in database
-        for (const [fileIdx, embeddingsData] of embeddingsByFile.entries()) {
-          const file = allChunks[fileIdx];
-
-          // Sort embeddings by chunk index
-          embeddingsData.sort((a, b) => a.chunkIndex - b.chunkIndex);
-
-          const embeddings_array = embeddingsData.map((e) => e.embedding);
-
-          this.db.insertChunks(
-            file.path,
-            file.chunks,
-            embeddings_array,
-            file.hash
-          );
-
-          filesProcessed++;
-        }
+        filesProcessed++;
       }
     }
 
@@ -373,8 +393,10 @@ export function initializeIndexing(
   const dbPath = join(storageDir, "embeddings.db");
   const db = new BeaconDatabase(dbPath, config.embedding.dimensions);
 
-  // Create embedder
-  const embedder = new Embedder(config.embedding);
+  // Create embedder — use model's context_limit if set, otherwise chunking.max_tokens.
+  // This provides a safety net to hard-truncate any chunk that exceeds the model's context.
+  const effectiveContextLimit = config.embedding.context_limit ?? config.chunking.max_tokens;
+  const embedder = new Embedder(config.embedding, effectiveContextLimit);
 
   // Create coordinator
   const coordinator = new IndexCoordinator(config, db, embedder, repoRoot);

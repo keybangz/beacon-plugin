@@ -12,20 +12,17 @@ import ConfigTool from "../tools/config.ts";
 import BlacklistTool from "../tools/blacklist.ts";
 import WhitelistTool from "../tools/whitelist.ts";
 import PerformanceTool from "../tools/performance.ts";
+import TerminateIndexerTool from "../tools/terminate-indexer.ts";
 
 /**
  * Beacon plugin for OpenCode
  * Handles:
- * - Auto-indexing on session start
- * - Re-embedding on file changes
- * - Garbage collection after bash commands
+ * - Garbage collection after bash/file tool calls
  * - Context injection before compaction
+ * - Shell environment setup
  */
 export const BeaconPlugin: Plugin = async ({
-  project,
   client,
-  $,
-  directory,
   worktree,
 }) => {
   return {
@@ -39,64 +36,25 @@ export const BeaconPlugin: Plugin = async ({
       blacklist: BlacklistTool,
       whitelist: WhitelistTool,
       performance: PerformanceTool,
+      "terminate-indexer": TerminateIndexerTool,
     },
 
-    // Session start hook - initialize indexing
-    "session.created": async (input, output) => {
-      try {
-        // TODO: Implement session start logic
-        // 1. Check if .beacon database exists
-        // 2. If not, perform full index
-        // 3. If yes, perform diff-based catch-up
-        await client.app.log({
-          body: {
-            service: "beacon",
-            level: "info",
-            message: "Beacon session started",
-            extra: { directory, worktree },
-          },
-        });
-      } catch (error: unknown) {
-        const errorMsg =
-          error instanceof Error ? error.message : String(error);
-        await client.app.log({
-          body: {
-            service: "beacon",
-            level: "error",
-            message: `Session start failed: ${errorMsg}`,
-          },
-        });
-      }
-    },
-
-    // File edit hook - re-embed changed files
-    "file.edited": async (input, output) => {
-      try {
-        // TODO: Implement file re-embedding
-        // 1. Get changed file path
-        // 2. Read content and hash
-        // 3. Split into chunks
-        // 4. Generate embeddings
-        // 5. Update database
-      } catch (error: unknown) {
-        const errorMsg =
-          error instanceof Error ? error.message : String(error);
-        await client.app.log({
-          body: {
-            service: "beacon",
-            level: "warn",
-            message: `File embedding failed: ${errorMsg}`,
-          },
-        });
-      }
-    },
-
-    // Tool execution hook - handle post-tool cleanup
+    // Tool execution hook - handle post-tool sync and garbage collection
     "tool.execute.after": async (input, output) => {
       try {
-        // If bash command was executed, run garbage collection
-        if (input.tool === "bash") {
-          // TODO: Implement garbage collection
+        // If a file-modifying tool was executed, re-embed the changed file
+        const fileTools = ["write_file", "edit_file", "str_replace_editor"];
+        const shellTools = ["bash", "shell"];
+
+        if (fileTools.includes(input.tool)) {
+          // TODO: Implement incremental re-embedding for changed files
+          // 1. Extract file path from input.args
+          // 2. Read content and hash
+          // 3. Split into chunks
+          // 4. Generate embeddings
+          // 5. Update database
+        } else if (shellTools.includes(input.tool)) {
+          // TODO: Implement garbage collection for deleted files
           // 1. Detect deleted files
           // 2. Remove corresponding chunks from database
         }
@@ -107,7 +65,7 @@ export const BeaconPlugin: Plugin = async ({
           body: {
             service: "beacon",
             level: "warn",
-            message: `Garbage collection failed: ${errorMsg}`,
+            message: `Post-tool sync failed: ${errorMsg}`,
           },
         });
       }
@@ -139,8 +97,7 @@ The codebase has been indexed for semantic search. The Beacon search capability 
     // Shell environment hook - inject necessary variables
     "shell.env": async (input, output) => {
       try {
-        // TODO: Inject any necessary environment variables
-        // For now, just ensure standard vars are available
+        // Ensure standard Beacon env vars are available
         output.env.BEACON_HOME = worktree;
       } catch (error: unknown) {
         // Silently fail - don't block shell execution
@@ -148,3 +105,5 @@ The codebase has been indexed for semantic search. The Beacon search capability 
     },
   };
 };
+
+export default BeaconPlugin;

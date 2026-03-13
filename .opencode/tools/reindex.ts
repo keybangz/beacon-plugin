@@ -11,7 +11,7 @@ import { openDatabase } from "../../src/lib/db.ts";
 import { Embedder } from "../../src/lib/embedder.ts";
 import { IndexCoordinator } from "../../src/lib/sync.ts";
 import { join } from "path";
-import { mkdirSync, existsSync } from "fs";
+import { mkdirSync, existsSync, unlinkSync, rmSync } from "fs";
 
 export default tool({
   description:
@@ -35,12 +35,21 @@ export default tool({
 
       const dbPath = join(storagePath, "embeddings.db");
 
+      // Delete existing database files to guarantee a truly clean slate.
+      // Relying on db.clear() (DELETE FROM chunks) is not sufficient when
+      // config parameters like max_tokens or dimensions have changed between runs.
+      for (const suffix of ["", "-wal", "-shm"]) {
+        const f = dbPath + suffix;
+        if (existsSync(f)) unlinkSync(f);
+      }
+
       // Initialize database
       const db = openDatabase(dbPath, config.embedding.dimensions);
 
       try {
-        // Initialize embedder
-        const embedder = new Embedder(config.embedding);
+        // Initialize embedder - use context_limit if set, otherwise chunking max_tokens
+        const effectiveContextLimit = config.embedding.context_limit ?? config.chunking.max_tokens;
+        const embedder = new Embedder(config.embedding, effectiveContextLimit);
 
         // Create index coordinator
         const coordinator = new IndexCoordinator(

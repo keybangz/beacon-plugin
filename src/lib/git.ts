@@ -5,6 +5,8 @@
 
 import { execSync } from "child_process";
 import { createHash } from "crypto";
+import { statSync } from "fs";
+import { join } from "path";
 import type { ModifiedFile } from "./types.js";
 
 /**
@@ -40,68 +42,88 @@ export function getFileHash(content: string): string {
 }
 
 /**
- * Get modified files since a given timestamp
+ * Get modified files since a given timestamp.
+ * - Tracked files: uses `git log --since` to find files changed in commits after
+ *   sinceIso, plus `git diff-index HEAD` for staged/unstaged working-tree changes.
+ * - Untracked files: only included when their mtime is newer than sinceIso.
  * @param repoRoot - Repository root path
- * @param sinceIso - ISO timestamp to compare against
+ * @param sinceIso - ISO timestamp; only files modified after this are returned
  * @returns Array of modified files with timestamps
  */
 export function getModifiedFilesSince(
   repoRoot: string,
   sinceIso: string
 ): ModifiedFile[] {
-  try {
-    // Note: sinceIso parameter allows filtering by date, but git diff-index
-    // returns all changed files relative to HEAD regardless
+  const sinceMs = new Date(sinceIso).getTime();
 
-    // Use git diff-index to find changed files
-    const result: string = execSync(
-      "git diff-index --raw --name-only HEAD",
-      {
-        cwd: repoRoot,
-        encoding: "utf-8",
-      }
+  try {
+    // 1. Files changed in commits since sinceIso
+    const logResult: string = execSync(
+      `git log --since="${sinceIso}" --name-only --pretty=format:""`,
+      { cwd: repoRoot, encoding: "utf-8" }
+    );
+    const committedFiles = new Set(
+      logResult
+        .trim()
+        .split("\n")
+        .map((l) => l.trim())
+        .filter((l) => l.length > 0)
     );
 
-    const changedFiles: string[] = result
+    // 2. Files with working-tree changes (staged or unstaged) relative to HEAD
+    const diffResult: string = execSync(
+      "git diff-index --name-only HEAD",
+      { cwd: repoRoot, encoding: "utf-8" }
+    );
+    const workingTreeFiles = diffResult
       .trim()
       .split("\n")
-      .filter((line) => line.length > 0);
+      .filter((l) => l.length > 0);
 
-    // Also get untracked files
-    const untrackedResult: string = execSync("git ls-files --others --exclude-standard", {
-      cwd: repoRoot,
-      encoding: "utf-8",
-    });
-
-    const untrackedFiles: string[] = untrackedResult
-      .trim()
-      .split("\n")
-      .filter((line) => line.length > 0);
+    // Merge both sets of tracked changed files
+    for (const f of workingTreeFiles) committedFiles.add(f);
 
     const modifiedFiles: ModifiedFile[] = [];
 
-    // Add changed files
-    for (const file of changedFiles) {
+    for (const file of committedFiles) {
       modifiedFiles.push({
         path: file,
         modified_at: new Date().toISOString(),
       });
     }
 
-    // Add untracked files that are newer than sinceDate
+    // 3. Untracked files — only include those newer than sinceIso
+    const untrackedResult: string = execSync(
+      "git ls-files --others --exclude-standard",
+      { cwd: repoRoot, encoding: "utf-8" }
+    );
+    const untrackedFiles = untrackedResult
+      .trim()
+      .split("\n")
+      .filter((l) => l.length > 0);
+
     for (const file of untrackedFiles) {
-      modifiedFiles.push({
-        path: file,
-        modified_at: new Date().toISOString(),
-      });
+      try {
+        const fullPath = join(repoRoot, file);
+        const mtime = statSync(fullPath).mtimeMs;
+        if (mtime > sinceMs) {
+          modifiedFiles.push({
+            path: file,
+            modified_at: new Date(mtime).toISOString(),
+          });
+        }
+      } catch {
+        // File may have been deleted between listing and stat — skip
+      }
     }
 
     return modifiedFiles;
   } catch (error: unknown) {
-    // If git command fails, return empty array (might not be in a git repo)
+    // If git command fails (e.g. no commits yet), return empty array
     if (
       error instanceof Error &&
-      error.message.includes("fatal: Not a valid object name")
+      (error.message.includes("fatal: Not a valid object name") ||
+       error.message.includes("fatal: bad default revision"))
     ) {
       return [];
     }

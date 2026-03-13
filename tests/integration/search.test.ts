@@ -15,8 +15,8 @@ const TEST_DB_DIR = path.join(process.cwd(), ".test-search-db");
 let testDbPath: string;
 let db: BeaconDatabase;
 
-// Mock configuration for testing
-const testConfig: BeaconConfig = {
+// Mock configuration for testing — storage.path is overridden per-test
+const testConfig: Omit<BeaconConfig, 'storage'> = {
   embedding: {
     api_base: "http://localhost:11434",
     model: "nomic-embed-text",
@@ -50,9 +50,6 @@ const testConfig: BeaconConfig = {
       identifier_boost: 1.5,
       debug: false,
     },
-  },
-  storage: {
-    path: testDbPath,
   },
 };
 

@@ -8,6 +8,7 @@ import { getRepoRoot } from "../../src/lib/repo-root.ts";
 import { loadConfig } from "../../src/lib/config.ts";
 import { openDatabase } from "../../src/lib/db.ts";
 import { Embedder } from "../../src/lib/embedder.ts";
+import { truncateToTokenLimit } from "../../src/lib/tokenizer.ts";
 import { join } from "path";
 import { existsSync } from "fs";
 
@@ -61,19 +62,20 @@ export default tool({
 
         const embedder = new Embedder(config.embedding);
         
-        // Try to embed the query
+        // Try to embed the query (uses LRU cache — repeated/identical queries skip the HTTP round-trip)
         let results;
         try {
           const queryWithPrefix = (config.embedding.query_prefix || "") + args.query;
-          const embedding = await embedder.embedDocuments([queryWithPrefix]);
+          const queryEmbedding = await embedder.embedQuery(queryWithPrefix);
           
           results = db.search(
-            embedding[0],
+            queryEmbedding,
             args.topK ?? 10,
             args.threshold ?? 0.35,
             args.query,
             config,
-            args.pathPrefix
+            args.pathPrefix,
+            args.noHybrid
           );
         } catch (embedError: unknown) {
           // Fallback to FTS-only search
@@ -90,7 +92,7 @@ export default tool({
               file: r.filePath,
               lines: `${r.startLine}-${r.endLine}`,
               similarity: r.similarity.toFixed(3),
-              preview: r.chunkText.slice(0, 300),
+              preview: truncateToTokenLimit(r.chunkText, 150),
               _note: r._note,
             })),
           });
@@ -102,7 +104,7 @@ export default tool({
             file: r.filePath,
             lines: `${r.startLine}-${r.endLine}`,
             similarity: r.similarity.toFixed(3),
-            preview: r.chunkText.slice(0, 300),
+            preview: truncateToTokenLimit(r.chunkText, 150),
           })),
         });
       } finally {

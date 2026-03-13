@@ -1,21 +1,33 @@
 /**
  * File ignore pattern matching
- * Uses picomatch for glob pattern matching
+ * Uses picomatch for glob pattern matching with memoized compiled matchers
  */
 
 import pm from "picomatch";
 
 /**
- * Create a matcher function for glob patterns
+ * Memoized cache of compiled picomatch matchers keyed by a stable JSON key
+ * of the pattern array. Avoids recompiling 20+ glob patterns for every file
+ * during indexing (savings: ~400K compilations for 10K files × 20 patterns).
+ */
+const matcherCache = new Map<string, (path: string) => boolean>();
+
+/**
+ * Create (or retrieve from cache) a matcher function for glob patterns.
  * @param patterns - Array of glob patterns
  * @returns Function that returns true if path matches any pattern
  */
 function createMatcher(patterns: string[]): (path: string) => boolean {
-  const matchers = patterns.map((pattern) => pm(pattern, { dot: true }));
+  // Use JSON.stringify as a stable key — pattern arrays are small so this is cheap
+  const cacheKey = JSON.stringify(patterns);
+  const cached = matcherCache.get(cacheKey);
+  if (cached) return cached;
 
-  return (path: string): boolean => {
-    return matchers.some((matcher) => matcher(path));
-  };
+  const matchers = patterns.map((pattern) => pm(pattern, { dot: true }));
+  const matcher = (path: string): boolean => matchers.some((m) => m(path));
+
+  matcherCache.set(cacheKey, matcher);
+  return matcher;
 }
 
 /**

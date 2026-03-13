@@ -89,7 +89,7 @@ The plugin uses sensible defaults from `config/beacon.default.json`:
 
 ### Custom Configuration
 
-Create a `.beacon/beacon.json` in your project root to override defaults:
+Create a `.opencode/beacon.json` in your project root to override defaults:
 
 ```bash
 # View current configuration
@@ -247,9 +247,7 @@ Beacon integrates at these key moments:
 
 | Event | What Happens |
 |-------|--------------|
-| `session.created` | Index loads automatically |
-| `file.edited` | Changed files are re-indexed |
-| `tool.execute.after` | Cleanup if files were deleted |
+| `tool.execute.after` | Changed files are re-indexed; deleted files are cleaned up |
 | `experimental.session.compacting` | Index status added to context |
 
 The AI sees the Beacon context in the system message:
@@ -364,9 +362,8 @@ opencode reindex
 
 ## Next Steps
 
-- **Learn More**: Check [README.md](./README.md) for detailed technical info
 - **Examples**: See [EXAMPLES.md](./EXAMPLES.md) for real-world use cases
-- **API Reference**: Review tool signatures with `opencode --help`
+- **API Reference**: Review tool signatures in [README.md](./README.md)
 
 ## Support
 

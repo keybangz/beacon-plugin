@@ -1,6 +1,17 @@
 {
   "ollama": {
-    "description": "Ollama (local)",
+    "description": "Ollama (local) — all-minilm:22m, 384-dim, ~46MB, 4-6× faster than nomic-embed-text on CPU",
+    "embedding": {
+      "api_base": "http://localhost:11434/v1",
+      "model": "all-minilm:22m",
+      "api_key_env": "",
+      "dimensions": 384,
+      "batch_size": 50,
+      "query_prefix": ""
+    }
+  },
+  "ollama-nomic": {
+    "description": "Ollama (local) — nomic-embed-text, 768-dim, higher quality for long documents",
     "embedding": {
       "api_base": "http://localhost:11434/v1",
       "model": "nomic-embed-text",

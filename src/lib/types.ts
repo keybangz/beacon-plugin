@@ -17,6 +17,8 @@ export interface EmbeddingConfig {
   batch_size: number;
   /** Prefix to prepend to search queries */
   query_prefix: string;
+  /** Model context limit in tokens (for hard-truncation). Defaults to 256. */
+  context_limit?: number;
 }
 
 export interface ChunkingConfig {

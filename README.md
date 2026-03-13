@@ -32,19 +32,11 @@ cd beacon-opencode
 
 ### 3. Add to OpenCode
 
-Add this to your `.opencode/opencode.json`:
+Copy the `.opencode/` directory from this repo into your project root, or add the plugin path to your project's `.opencode/opencode.json`:
 
 ```json
 {
-  "plugins": ["./beacon-opencode"]
-}
-```
-
-Or install from npm once published:
-
-```json
-{
-  "plugins": ["opencode-beacon"]
+  "plugin": ["./path/to/beacon-plugin/.opencode/plugins/beacon.ts"]
 }
 ```
 
@@ -61,7 +53,6 @@ opencode search "authentication flow"
 ## Documentation
 
 - **[SETUP_OPENCODE.md](./SETUP_OPENCODE.md)** — Complete setup and usage guide for installing Beacon with OpenCode
-- **[AI_MODELS_USING_BEACON.md](./AI_MODELS_USING_BEACON.md)** — How AI assistants automatically use Beacon without test scripts
 - **[EXAMPLES.md](./EXAMPLES.md)** — Real-world usage examples and workflows
 
 ### 4. Start OpenCode
@@ -148,9 +139,7 @@ beacon-opencode/
 
 ### Event Hooks
 
-- **`session.created`** — Full or diff-based indexing on session start
-- **`file.edited`** — Re-embed changed files
-- **`tool.execute.after`** — Garbage collect deleted files (after bash)
+- **`tool.execute.after`** — Re-embed changed files; garbage collect deleted files (after write/shell tools)
 - **`experimental.session.compacting`** — Inject index status before compaction
 - **`shell.env`** — Inject environment variables
 
@@ -256,10 +245,10 @@ npm test              # Run tests
 - ✅ Tokenization (BM25, identifier extraction, RRF)
 - ✅ Embedding coordination (with retry logic)
 - ✅ Safety checks (blacklist validation)
-- ⏳ Database layer (SQLite + vector search) — TODO
-- ⏳ Search implementation — TODO
-- ⏳ Tool implementations — TODO
-- ⏳ Plugin hooks (sync, embedding, GC) — TODO
+- ✅ Database layer (SQLite + FTS5)
+- ✅ Tool implementations (search, index, status, reindex, config, blacklist, whitelist, performance)
+- ⏳ Vector search (sqlite-vec integration) — in progress
+- ⏳ Auto-sync hooks (incremental re-embedding, GC) — in progress
 
 ## Troubleshooting
 

@@ -33,7 +33,7 @@ export default tool({
 
     const dbPath = join(repoRoot, (config as any).storage?.path || "", "embeddings.db");
     const db = openDatabase(dbPath, (config as any).embedding?.dimensions || 1024);
-    const embedder = new Embedder(config as any);
+    const embedder = new Embedder(config.embedding);
 
     let output = "";
 
@@ -138,8 +138,8 @@ export default tool({
 
           output += "\n🗂️  DATABASE STATUS\n";
           output += `├─ Total Chunks: ${stats.total_chunks}\n`;
-           output += `├─ Indexed Files: ${(stats as any).indexed_files || stats.files_indexed}\n`;
-           output += `└─ Database Size: ${((stats as any).db_size_bytes || stats.database_size_mb * 1024 * 1024 / 1024 / 1024).toFixed(2)}MB\n`;
+          output += `├─ Indexed Files: ${stats.files_indexed}\n`;
+          output += `└─ Database Size: ${stats.database_size_mb.toFixed(2)}MB\n`;
 
           output += "\n💾 CACHE STATUS\n";
           output += `├─ Size: ${cacheStats.size}/${1000} entries\n`;

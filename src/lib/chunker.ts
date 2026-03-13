@@ -10,14 +10,21 @@ export interface ChunkResult {
 }
 
 /**
- * Count approximate tokens in text (rough estimation)
- * Uses word count * 1.3 as token estimate
+ * Count approximate tokens in text (conservative estimation for code)
+ * Uses ~3 characters per token instead of 4, because code is denser than
+ * prose: short identifiers, operators, and punctuation each consume a token
+ * even though they contain few characters. The conservative estimate prevents
+ * chunks from exceeding embedding-model context limits.
  * @param text - Text to count
  * @returns Approximate token count
  */
 function estimateTokens(text: string): number {
-  const words = text.split(/\s+/).length;
-  return Math.ceil(words * 1.3);
+  // 3 chars/token is a safer estimate for source code.
+  // The standard BPE 4 chars/token rule applies to natural-language prose;
+  // code typically sits closer to 2-3 chars/token due to dense punctuation
+  // and single-character operators. Using 3 gives a ~33 % safety margin that
+  // prevents Ollama "input length exceeds context length" errors.
+  return Math.ceil(text.length / 3);
 }
 
 /**
