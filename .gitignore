@@ -1,5 +1,11 @@
 # Dependencies
 node_modules/
+.opencode/node_modules/
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
 
 # Beacon embeddings database (auto-generated per-repo)
 *.db
@@ -7,14 +13,38 @@ node_modules/
 *.db-shm
 .claude/.beacon/
 .claude/.ccm/
+.opencode/.beacon/
 
-# User-specific Claude settings
+# User-specific settings
 .claude/settings.local.json
+.opencode/config.local.json
+
+# Environment files
+.env
+.env.local
+.env.*.local
 
 # Internal dev artifacts
 reports/
 TODO.md
 
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
 # OS files
 .DS_Store
 Thumbs.db
+
+# Logs and coverage
+*.log
+npm-debug.log*
+coverage/
+.nyc_output/
+
+# Misc
+.cache/
+tmp/

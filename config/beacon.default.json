@@ -14,17 +14,33 @@
   },
   "indexing": {
     "include": [
-      "**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx",
-      "**/*.py", "**/*.go", "**/*.rs", "**/*.java",
-      "**/*.rb", "**/*.php", "**/*.sql", "**/*.md"
+      "**/*.ts",
+      "**/*.tsx",
+      "**/*.js",
+      "**/*.jsx",
+      "**/*.py",
+      "**/*.go",
+      "**/*.rs",
+      "**/*.java",
+      "**/*.rb",
+      "**/*.php",
+      "**/*.sql",
+      "**/*.md"
     ],
     "exclude": [
-      "node_modules/**", "dist/**", "build/**",
-      ".next/**", "*.lock", "*.min.js"
+      "node_modules/**",
+      "dist/**",
+      "build/**",
+      ".next/**",
+      "*.lock",
+      "*.min.js",
+      ".git/**",
+      ".env*"
     ],
     "max_file_size_kb": 500,
     "auto_index": true,
-    "max_files": 10000
+    "max_files": 10000,
+    "concurrency": 4
   },
   "search": {
     "top_k": 10,
@@ -40,10 +56,6 @@
     }
   },
   "storage": {
-    "path": ".claude/.beacon"
-  },
-  "intercept": {
-    "enabled": true,
-    "min_pattern_length": 4
+    "path": ".opencode/.beacon"
   }
 }

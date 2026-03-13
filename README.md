@@ -1,33 +1,21 @@
-<p align="center">
-  <img src="images/beacon.png" alt="Beacon" width="180">
-</p>
+# Beacon OpenCode Plugin
 
-<h1 align="center">Beacon</h1>
+**Turn OpenCode into Cursor** — Semantic code search that understands your codebase. Find code by meaning, not just string matching.
 
-<p align="center">
-  <strong>Turn Claude Code into Cursor.</strong><br>
-  Semantic code search that understands your codebase — find code by meaning, not just string matching.
-</p>
+This is a complete port of the Beacon plugin from Claude Code to OpenCode, featuring hybrid search (semantic embeddings + BM25 keyword matching + identifier boosting).
 
-<p align="center">
-  <a href="#quick-start">Quick Start</a> · <a href="#usage">Usage</a> · <a href="#embedding-models">Models</a> · <a href="#commands">Commands</a> · <a href="#configuration">Config</a> · <a href="EXAMPLES.md">Examples</a>
-</p>
+## Features
 
----
-
-<p align="center">
-  <img src="images/benchmark.png" alt="Benchmark: 98.3% accuracy at 101ms" width="700">
-</p>
-
-<p align="center">
-  <strong>98.3% accuracy · 5x faster than grep · 20-query benchmark on a real codebase</strong>
-</p>
-
----
+- **Hybrid Search** — Combines vector embeddings, BM25 keyword matching, and identifier boosting for best results
+- **Smart Indexing** — Full index on first run, diff-based catch-up on subsequent syncs
+- **Auto-Sync** — Hooks auto-embed changed files and garbage collect deleted ones
+- **Graceful Degradation** — Falls back to keyword-only search if embedding server is down
+- **Pluggable Embeddings** — Ollama (local/free), OpenAI, Voyage AI, LiteLLM, or any OpenAI-compatible API
+- **Strict TypeScript** — Fully typed with `strict: true` for reliability
 
 ## Quick Start
 
-### 1. Install Ollama (local embeddings, free)
+### 1. Install Ollama (for local embeddings)
 
 ```bash
 brew install ollama
@@ -35,285 +23,142 @@ ollama serve &
 ollama pull nomic-embed-text
 ```
 
-### 2. Install the Beacon plugin
+### 2. Clone this repository
 
 ```bash
-claude plugin marketplace add sagarmk/Claude-Code-Beacon-Plugin
-claude plugin install beacon@claude-code-beacon-plugin
+git clone https://github.com/sagarmk/beacon-opencode
+cd beacon-opencode
 ```
 
-### 3. Start Claude Code
+### 3. Add to OpenCode
 
-```bash
-claude
-```
-
-That's it. On first session start, Beacon will:
-1. **Install npm dependencies automatically** (native modules like `better-sqlite3` — takes a few seconds)
-2. **Index your codebase** in the background
-
-No `npm install`, no manual setup. Just install and go.
-
-## Usage
-
-After installing, Beacon indexes automatically on session start. Here's the essentials:
-
-### Force a full re-index
-
-```
-> /reindex
-```
-
-Deletes existing embeddings and rebuilds from scratch — useful after switching models or if the index gets stale.
-
-### Check index health
-
-```
-> /index
-```
-
-```
-Beacon Index
-
-● ● ● ● ●    nomic-embed-text · Ollama (local)
-● ● ● ● ●    768 dims · 3.8 MB
-● ● ● ● ●
-● ● ● ● ●    Coverage: 100% (38/38 files)
-
-              Indexed by extension
-              ● .js  25 files
-              ● .md  13 files
-
-              Statistics
-              Indexed files    38
-              Total chunks     109
-              Avg chunks/file  2.9
-              Last sync        2 minutes ago
-```
-
-For a quick numeric summary:
-
-```
-> /index-status
-```
+Add this to your `.opencode/opencode.json`:
 
 ```json
 {
-  "files_indexed": 38,
-  "total_chunks": 114,
-  "last_sync": "2026-03-01T04:30:21.453Z",
-  "embedding_model": "nomic-embed-text",
-  "embedding_endpoint": "http://localhost:11434/v1"
+  "plugins": ["./beacon-opencode"]
 }
 ```
 
-### Search your codebase
-
-```
-> /search-code "authentication flow"
-```
-
-```json
-[
-  {
-    "file": "src/middleware/auth.ts",
-    "lines": "12-45",
-    "similarity": "0.82",
-    "score": "0.74",
-    "preview": "export async function verifyAuth(req, res, next) {\n  const token = req.headers.authorization?.split(' ')[1];\n  ..."
-  },
-  {
-    "file": "src/routes/login.ts",
-    "lines": "8-32",
-    "similarity": "0.78",
-    "score": "0.65",
-    "preview": "router.post('/login', async (req, res) => {\n  const { email, password } = req.body;\n  ..."
-  }
-]
-```
-
-Hybrid search combines **semantic similarity** (understands meaning), **BM25 keyword matching**, and **identifier boosting** — so searching "auth flow" finds code about authentication even if it never uses the word "auth".
-
-Options: `--top-k N` (results count), `--threshold F` (min score), `--path <dir>` (scope to directory), `--no-hybrid` (pure vector search).
-
----
-
-## Embedding Models
-
-Beacon runs on **open-source models by default** — no API keys, no cloud costs, fully local via [Ollama](https://ollama.com).
-
-| Model | Dims | Context | Speed | Best for |
-|-------|------|---------|-------|----------|
-| **nomic-embed-text** (default) | 768 | 8192 | Fast | General-purpose, great code search |
-| **mxbai-embed-large** | 1024 | 512 | Fast | Higher accuracy, larger vectors |
-| **snowflake-arctic-embed:l** | 1024 | 512 | Medium | Strong retrieval benchmarks |
-| **all-minilm** | 384 | 512 | Very fast | Lightweight, low resource usage |
-
-To switch models, pull with Ollama and update your config:
-
-```bash
-ollama pull mxbai-embed-large
-```
-
-```json
-// .claude/beacon.json
-{
-  "embedding": {
-    "model": "mxbai-embed-large",
-    "dimensions": 1024,
-    "query_prefix": ""
-  }
-}
-```
-
-Then run `/reindex` to rebuild with the new model.
-
-### Cloud Providers
-
-For cloud-hosted embeddings, create `.claude/beacon.json` in your repo:
-
-<details>
-<summary><strong>OpenAI</strong></summary>
-
-```bash
-export OPENAI_API_KEY="sk-..."
-```
+Or install from npm once published:
 
 ```json
 {
-  "embedding": {
-    "api_base": "https://api.openai.com/v1",
-    "model": "text-embedding-3-small",
-    "api_key_env": "OPENAI_API_KEY",
-    "dimensions": 1536,
-    "batch_size": 100,
-    "query_prefix": ""
-  }
+  "plugins": ["opencode-beacon"]
 }
 ```
 
-</details>
-
-<details>
-<summary><strong>Voyage AI</strong></summary>
+### 4. Start OpenCode
 
 ```bash
-export VOYAGE_API_KEY="pa-..."
+opencode
 ```
 
-```json
-{
-  "embedding": {
-    "api_base": "https://api.voyageai.com/v1",
-    "model": "voyage-code-3",
-    "api_key_env": "VOYAGE_API_KEY",
-    "dimensions": 1024,
-    "batch_size": 50,
-    "query_prefix": ""
-  }
-}
+Beacon will automatically:
+1. Install dependencies (first run only)
+2. Index your codebase in the background
+3. Enable semantic search via the `search` tool
+
+## Tools
+
+### Search
+
+```
+search "authentication flow"
 ```
 
-</details>
+Hybrid search combining semantic similarity, BM25 keyword matching, and identifier boosting.
 
-<details>
-<summary><strong>LiteLLM proxy</strong> (Vertex AI, Bedrock, Azure, etc.)</summary>
+**Options:**
+- `topK` — Number of results (default: 10)
+- `threshold` — Minimum score cutoff (default: 0.35)
+- `pathPrefix` — Scope results to a directory
+- `noHybrid` — Use pure vector search only
 
-```bash
-pip install litellm
-litellm --model vertex_ai/text-embedding-004 --port 4000
+### Indexing
+
+```
+status          # Quick health check
+index           # Visual dashboard with coverage
+reindex         # Force full rebuild from scratch
 ```
 
-```json
-{
-  "embedding": {
-    "api_base": "http://localhost:4000/v1",
-    "model": "vertex_ai/text-embedding-004",
-    "api_key_env": "LITELLM_API_KEY",
-    "dimensions": 1024,
-    "batch_size": 50,
-    "query_prefix": ""
-  }
-}
+### Configuration
+
+```
+config view                          # View current config
+config set embedding.model llama2    # Change embedding model
+blacklist list                       # Show blacklisted dirs
+blacklist add ./secrets              # Exclude from indexing
+whitelist add ./vendor/important     # Allow in blacklisted dir
 ```
 
-</details>
+## Architecture
 
-<details>
-<summary><strong>Custom endpoint</strong></summary>
+### Project Structure
 
-Any server implementing the OpenAI `/v1/embeddings` API will work. Set `api_base`, `model`, `dimensions`, and optionally `api_key_env` in `.claude/beacon.json`.
+```
+beacon-opencode/
+├── .opencode/
+│   ├── opencode.json           # Plugin config
+│   ├── package.json            # Dependencies for tools
+│   ├── plugins/
+│   │   └── beacon.ts           # Main plugin with event hooks
+│   └── tools/
+│       ├── search.ts           # Search tool
+│       ├── index.ts            # Index dashboard
+│       ├── status.ts           # Quick status
+│       ├── reindex.ts          # Full rebuild
+│       ├── config.ts           # Config management
+│       ├── blacklist.ts        # Exclude patterns
+│       └── whitelist.ts        # Include patterns
+├── src/
+│   └── lib/
+│       ├── types.ts            # TypeScript interfaces
+│       ├── db.ts               # SQLite + vector search (TODO)
+│       ├── tokenizer.ts        # BM25 + RRF algorithms
+│       ├── chunker.ts          # Code chunking
+│       ├── embedder.ts         # Embedding API coordination
+│       ├── config.ts           # Config loading + merging
+│       ├── git.ts              # File discovery
+│       ├── ignore.ts           # Pattern matching
+│       ├── repo-root.ts        # .git detection
+│       └── safety.ts           # Blacklist validation
+├── config/
+│   └── beacon.default.json     # Default configuration
+├── package.json
+└── tsconfig.json
+```
 
-</details>
+### Event Hooks
 
-## Commands
+- **`session.created`** — Full or diff-based indexing on session start
+- **`file.edited`** — Re-embed changed files
+- **`tool.execute.after`** — Garbage collect deleted files (after bash)
+- **`experimental.session.compacting`** — Inject index status before compaction
+- **`shell.env`** — Inject environment variables
 
-Beacon indexes your codebase automatically on session start and re-embeds files as you edit — no manual steps needed.
+### Technology Stack
 
-#### Search
+- **Database** — SQLite with WAL mode
+- **Vector Search** — sqlite-vec (cosine distance)
+- **Full-Text Search** — FTS5 with porter stemmer
+- **Ranking** — RRF combining vector + BM25 + identifier matching
+- **Embeddings** — OpenAI-compatible API (Ollama, OpenAI, Voyage AI, etc.)
+- **File Scanning** — Git-based (git ls-files)
+- **Pattern Matching** — picomatch for glob patterns
 
-| Command | Description |
-|---------|-------------|
-| `/search-code` | Hybrid code search — semantic + keyword + BM25 matching. Supports `--path <dir>` to scope results |
+## Configuration
 
-#### Index
+### Default Configuration
 
-| Command | Description |
-|---------|-------------|
-| `/index` | Visual overview — files, chunks, coverage, provider |
-| `/index-status` | Quick health check — file count, chunk count, last sync |
-| `/reindex` | Force full re-index from scratch |
-| `/run-indexer` | Manually trigger indexing |
-| `/terminate-indexer` | Kill a running sync process |
-
-#### Config
-
-| Command | Description |
-|---------|-------------|
-| `/config` | View and modify Beacon configuration |
-| `/blacklist` | Prevent indexing of specific directories |
-| `/whitelist` | Allow indexing in otherwise-blacklisted directories |
-
-Beacon also provides a **code-explorer** agent and a **semantic-search** skill that Claude can invoke automatically.
-
-<details>
-<summary><strong>Why Beacon?</strong></summary>
-
-- **Understands your questions** — ask "where is the auth flow?" and get `lib/auth.ts`, not every file containing "auth"
-- **Query expansion** — searches for "auth" automatically find code mentioning "authentication", "authorize", and "login"
-- **Stays in sync automatically** — hooks handle full index, incremental re-embedding on edits, and garbage collection
-- **Resilient** — retries with backoff on transient failures, auto-recovers from DB corruption, debounces GC
-- **Works with any embedding provider** — Ollama (local/free), OpenAI, Voyage AI, LiteLLM, or any OpenAI-compatible API
-- **Gives Claude better context** — slash commands, a code-explorer agent, and a grep-nudge hook for smarter search
-
-</details>
-
-<details>
-<summary><strong>How It Works</strong></summary>
-
-Beacon uses Claude Code [hooks](https://docs.anthropic.com/en/docs/claude-code/hooks) to stay in sync with your codebase:
-
-| Hook | Trigger | What it does |
-|------|---------|-------------|
-| **SessionStart** | Every session | Ensures npm deps are installed (first run only), then full index or diff-based catch-up |
-| **PostToolUse** | `Write`, `Edit`, `MultiEdit` | Re-embeds the changed file |
-| **PostToolUse** | `Bash` | Garbage collects embeddings for deleted files |
-| **PreCompact** | Before context compaction | Injects index status so search capability survives compaction |
-| **PreToolUse** | `Grep` | Intercepts grep and redirects to Beacon for semantic-style queries |
-
-</details>
-
-<details>
-<summary><strong>Configuration</strong></summary>
-
-Default configuration (`config/beacon.default.json`):
+See `config/beacon.default.json`:
 
 ```json
 {
   "embedding": {
     "api_base": "http://localhost:11434/v1",
     "model": "nomic-embed-text",
-    "api_key_env": "",
     "dimensions": 768,
     "batch_size": 10,
     "query_prefix": "search_query: "
@@ -324,8 +169,8 @@ Default configuration (`config/beacon.default.json`):
     "overlap_tokens": 50
   },
   "indexing": {
-    "include": ["**/*.ts", "**/*.tsx", "**/*.js", "..."],
-    "exclude": ["node_modules/**", "dist/**", "..."],
+    "include": ["**/*.ts", "**/*.tsx", "**/*.js", ...],
+    "exclude": ["node_modules/**", "dist/**", ...],
     "max_file_size_kb": 500,
     "auto_index": true,
     "max_files": 10000,
@@ -335,39 +180,21 @@ Default configuration (`config/beacon.default.json`):
     "top_k": 10,
     "similarity_threshold": 0.35,
     "hybrid": {
-      "enabled": true,
       "weight_vector": 0.4,
       "weight_bm25": 0.3,
       "weight_rrf": 0.3,
-      "doc_penalty": 0.5,
-      "identifier_boost": 1.5,
-      "debug": false
+      "identifier_boost": 1.5
     }
   },
   "storage": {
-    "path": ".claude/.beacon"
+    "path": ".opencode/.beacon"
   }
 }
 ```
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `embedding.api_base` | `http://localhost:11434/v1` | Embedding API endpoint |
-| `embedding.model` | `nomic-embed-text` | Embedding model name |
-| `embedding.dimensions` | `768` | Vector dimensions (must match model) |
-| `embedding.query_prefix` | `search_query: ` | Prefix prepended to search queries |
-| `indexing.include` | Common code patterns | Glob patterns for files to index |
-| `indexing.exclude` | `node_modules`, `dist`, etc. | Glob patterns to skip |
-| `indexing.max_file_size_kb` | `500` | Skip files larger than this |
-| `indexing.auto_index` | `true` | Auto-index on session start |
-| `indexing.concurrency` | `4` | Number of files to index in parallel |
-| `search.top_k` | `10` | Max results per query |
-| `search.similarity_threshold` | `0.35` | Minimum similarity score |
-| `search.hybrid.enabled` | `true` | Enable hybrid search (set `false` for pure vector) |
+### Per-Repo Overrides
 
-#### Per-repo overrides
-
-Create `.claude/beacon.json` in any repo to override defaults. Values are deep-merged with the default config:
+Create `.opencode/beacon.json`:
 
 ```json
 {
@@ -384,56 +211,80 @@ Create `.claude/beacon.json` in any repo to override defaults. Values are deep-m
 }
 ```
 
-#### Storage
+## Development
 
-Beacon stores its SQLite database at `.claude/.beacon/embeddings.db` (configurable via `storage.path`). This file is auto-generated and safe to delete — run `/reindex` to rebuild. The database uses [sqlite-vec](https://github.com/asg017/sqlite-vec) for vector search and FTS5 for keyword matching.
+### Setup
 
-</details>
+```bash
+npm install
+npm run build          # Build TypeScript
+npm run type-check    # Check types
+npm test              # Run tests
+```
 
-<details>
-<summary><strong>Troubleshooting</strong></summary>
+### Code Style
 
-### What if Ollama is down?
+- **TypeScript** with `strict: true`
+- **Functional programming** — prefer pure functions, immutability
+- **Explicit return types** for all public functions
+- **No `any` types** — use `unknown` or proper typing
+- **Inline comments** for complex logic and business rules
 
-Beacon degrades gracefully when the embedding server is unreachable — it never blocks your session. Embedding requests automatically retry with backoff (1s, 4s) before giving up.
+## Implementation Status
 
-| Scenario | Behavior |
-|----------|----------|
-| **Session start** | Sync is skipped, error is logged, session continues normally |
-| **Search** | Falls back to keyword-only (BM25) search — still returns results |
-| **File edits** | Re-embedding fails silently, old embeddings are preserved |
-| **Status commands** | Work normally (DB-only, no Ollama needed) |
-| **DB corruption** | Auto-detected and rebuilt on next sync |
+- ✅ Type definitions and interfaces
+- ✅ Configuration management (loading, merging, validation)
+- ✅ File discovery (git integration)
+- ✅ Pattern matching (glob support)
+- ✅ Code chunking (token-based with overlap)
+- ✅ Tokenization (BM25, identifier extraction, RRF)
+- ✅ Embedding coordination (with retry logic)
+- ✅ Safety checks (blacklist validation)
+- ⏳ Database layer (SQLite + vector search) — TODO
+- ⏳ Search implementation — TODO
+- ⏳ Tool implementations — TODO
+- ⏳ Plugin hooks (sync, embedding, GC) — TODO
 
-Start Ollama at any time and run `/run-indexer` to catch up.
+## Troubleshooting
 
-### Manual indexing
+### Embedding server unreachable
 
-| Command | What it does |
-|---------|-------------|
-| `/run-indexer` | Manually trigger indexing — useful when `auto_index` is off or after starting Ollama late |
-| `/reindex` | Force a full re-index from scratch (deletes existing embeddings first) |
-| `/terminate-indexer` | Kill a stuck sync process and clean up lock state |
+Start Ollama:
 
-### Checking index health
+```bash
+ollama serve &
+ollama pull nomic-embed-text
+```
 
-Run `/index` for a visual overview with a coverage bar, file list, and provider info. For a quick numeric summary, use `/index-status` — it shows file count, chunk count, and last sync time.
+### Index corrupted
 
-Things to look for:
-- **Low coverage %** — files may be excluded by glob patterns or exceeding `max_file_size_kb`
-- **Sync status errors** — usually means the embedding server was unreachable during the last sync
-- **Stale sync warnings** — the index hasn't been updated recently; run `/run-indexer` to refresh
+Force rebuild:
 
-### Verifying search
+```
+reindex
+```
 
-Run `/search-code` with a test query to confirm search is working. If results include `"FTS-only"` in debug output, the embedding server is unreachable — search still works but without semantic matching (keyword/BM25 only).
+### Change embedding model
 
-</details>
-
-## Examples
-
-See [EXAMPLES.md](EXAMPLES.md) for real-world use cases — intent-based search, codebase navigation, identifier tracking, and auto-sync — each with concrete before/after comparisons.
+1. Install new model: `ollama pull mxbai-embed-large`
+2. Update config: `.opencode/beacon.json`
+3. Rebuild: `reindex`
 
 ## License
 
-[MIT](LICENSE)
+MIT — See LICENSE file
+
+## Contributing
+
+Contributions welcome! Please ensure:
+
+1. All TypeScript compiles with strict mode
+2. No `any` types
+3. Tests pass
+4. Code follows the functional programming guidelines
+
+## Related
+
+- [Beacon for Claude Code](https://github.com/sagarmk/Claude-Code-Beacon-Plugin) — Original plugin
+- [OpenCode Docs](https://opencode.ai/docs) — OpenCode documentation
+- [Ollama](https://ollama.com) — Local LLMs and embeddings
