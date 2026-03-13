@@ -216,9 +216,8 @@ export class IndexCoordinator {
             });
         }
         // Process queue with concurrency limit using Promise.allSettled
-        const results = await Promise.allSettled(processQueue.map(task => task()));
+        await Promise.allSettled(processQueue.map(task => task()));
         // Count successful completions (failures already logged in task)
-        return filesProcessed;
         return filesProcessed;
     }
     /**

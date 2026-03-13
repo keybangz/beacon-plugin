@@ -8,7 +8,7 @@ This guide walks you through installing and using the Beacon semantic search plu
 - **OpenCode** installed (latest version)
 - **A local LLM server** running Ollama (or compatible embedding service)
   - Default: `http://localhost:11434`
-  - Model: `nomic-embed-text` (recommended)
+  - Model: `all-minilm:22m` (recommended, 256-token context limit)
 
 ### Setting Up Ollama (One-time Setup)
 
@@ -18,13 +18,13 @@ If you don't have Ollama running locally:
 # Install Ollama from https://ollama.ai
 
 # Pull the embedding model
-ollama pull nomic-embed-text
+ollama pull all-minilm:22m
 
 # Start the server (runs on localhost:11434 by default)
 ollama serve
 ```
 
-The `nomic-embed-text` model is lightweight (~274MB) and perfect for local semantic search.
+The `all-minilm:22m` model is lightweight (~88MB) and perfect for local semantic search. It has a **256-token context limit**, so ensure your `context_limit` configuration matches this value.
 
 ## Installation
 
@@ -41,8 +41,8 @@ npm install beacon-opencode
 
 ```bash
 # Clone the repository
-git clone https://github.com/sagarmk/beacon-opencode.git
-cd beacon-opencode
+git clone https://github.com/keybangz/beacon-plugin.git
+cd beacon-plugin
 
 # Install dependencies
 npm install
@@ -50,8 +50,8 @@ npm install
 # Build the project
 npm run build
 
-# Link for local development
-npm link
+# Build outputs to .opencode/src/lib/
+ls .opencode/src/lib/
 ```
 
 ## Configuration
@@ -64,28 +64,37 @@ The plugin uses sensible defaults from `config/beacon.default.json`:
 {
   "embedding": {
     "api_base": "http://localhost:11434",
-    "model": "nomic-embed-text",
+    "model": "all-minilm:22m",
+    "api_key_env": "",
     "dimensions": 384,
-    "batch_size": 32
+    "batch_size": 50,
+    "query_prefix": "",
+    "context_limit": 256
   },
   "chunking": {
     "strategy": "hybrid",
-    "max_tokens": 512,
-    "overlap_tokens": 50
+    "max_tokens": 256,
+    "overlap_tokens": 32
   },
   "search": {
-    "top_k": 5,
-    "similarity_threshold": 0.3,
+    "top_k": 10,
+    "similarity_threshold": 0.35,
     "hybrid": {
       "enabled": true,
       "weight_vector": 0.4,
       "weight_bm25": 0.3,
       "weight_rrf": 0.3,
-      "identifier_boost": 1.5
+      "doc_penalty": 0.5,
+      "identifier_boost": 1.5,
+      "debug": false
     }
   }
 }
 ```
+
+#### Safety Margin
+
+Beacon uses an **80% safety margin** (e.g., 256 * 0.8 = 204 tokens = 612 chars) to prevent "input length exceeds context length" errors. The chunker truncates at line boundaries first, then character boundaries if needed.
 
 ### Custom Configuration
 
@@ -283,8 +292,22 @@ opencode config --set embedding.api_base http://your-server:11434
 
 This happens if you change embedding models. Rebuild:
 ```bash
+npm run build
 opencode reindex --confirm
 ```
+
+### Issue: "Input length exceeds context length"
+
+This usually means your `context_limit` config exceeds the model's actual context window. For example, `all-minilm:22m` has a 256-token limit, so set:
+```json
+{
+  "embedding": {
+    "context_limit": 256
+  }
+}
+```
+
+Then rebuild and reindex: `npm run build && opencode reindex`
 
 ### Issue: Search returns no results
 

@@ -38,6 +38,59 @@ function extractFilePath(args: any, toolName: string): string | null {
 }
 
 /**
+ * Extract deleted/moved file paths from shell commands
+ * Detects: rm, rmdir, mv, git rm, git mv
+ */
+function extractDeletedFiles(command: string): string[] {
+  const files: string[] = [];
+  if (!command) return files;
+  
+  // Pattern for rm, rmdir commands
+  const rmPattern = /(?:^|\s)(?:rm|rmdir)\s+(?:-[rf]+\s+)?(.+)/g;
+  let match;
+  
+  while ((match = rmPattern.exec(command)) !== null) {
+    const args = match[1].trim();
+    // Split by common separators, filter out flags
+    const parts = args.split(/[&&||;\s]+/);
+    for (const part of parts) {
+      const cleaned = part.replace(/^-[rf]+\s*/, '').trim();
+      if (cleaned && !cleaned.startsWith('-') && !cleaned.match(/^[{}|$&<>`]/)) {
+        files.push(cleaned);
+      }
+    }
+  }
+  
+  // Pattern for git rm
+  const gitRmPattern = /git\s+rm\s+(-[rf]+\s+)?(.+)/g;
+  while ((match = gitRmPattern.exec(command)) !== null) {
+    const args = match[2].trim();
+    const parts = args.split(/[&&||;\s]+/);
+    for (const part of parts) {
+      const cleaned = part.replace(/^-[rf]+\s*/, '').trim();
+      if (cleaned && !cleaned.startsWith('-')) {
+        files.push(cleaned);
+      }
+    }
+  }
+  
+  // Pattern for git mv (move/rename)
+  const gitMvPattern = /git\s+mv\s+(.+)/g;
+  while ((match = gitMvPattern.exec(command)) !== null) {
+    const args = match[1].trim();
+    const parts = args.split(/[&&||;\s]+/);
+    // git mv takes two args: source dest, we track both as potentially orphaned
+    for (const part of parts) {
+      if (part && !part.startsWith('-')) {
+        files.push(part);
+      }
+    }
+  }
+  
+  return [...new Set(files)]; // Remove duplicates
+}
+
+/**
  * Initialize indexing coordinator for a given worktree
  */
 function getCoordinator(worktree: string) {
@@ -112,8 +165,35 @@ export const BeaconPlugin: Plugin = async ({
             }
           }
         } else if (shellTools.includes(input.tool)) {
-          // TODO: Implement garbage collection for deleted files
-          // Detect rm, mv, git rm operations and clean up orphaned chunks
+          // Garbage collection for deleted/moved files
+          const command = input.args?.command || input.args?.cmd || "";
+          const deletedFiles = extractDeletedFiles(command);
+          
+          if (deletedFiles.length > 0) {
+            try {
+              const { coordinator, db } = getCoordinator(worktree);
+              let removedCount = 0;
+              
+              for (const filePath of deletedFiles) {
+                coordinator.garbageCollect();
+                removedCount++;
+              }
+              
+              db.close();
+              
+              if (removedCount > 0) {
+                await client.app.log({
+                  body: {
+                    service: "beacon",
+                    level: "info",
+                    message: `Garbage collected ${removedCount} deleted files`,
+                  },
+                });
+              }
+            } catch (err) {
+              // Log but don't fail the hook
+            }
+          }
         }
       } catch (error: unknown) {
         const errorMsg =
