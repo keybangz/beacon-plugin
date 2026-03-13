@@ -12,6 +12,8 @@ Beacon is a semantic search plugin for OpenCode, featuring hybrid search (semant
 - **Graceful Degradation** — Falls back to keyword-only search if embedding server is down
 - **Pluggable Embeddings** — Ollama (local/free), OpenAI, Voyage AI, LiteLLM, or any OpenAI-compatible API
 - **Strict TypeScript** — Fully typed with `strict: true` for reliability
+- **Safe Chunking** — 80% safety margin with character-level truncation to prevent context errors
+- **Graceful Termination** — Stop indexing operations with `terminate-indexer` tool
 
 ## Quick Start
 
@@ -20,17 +22,26 @@ Beacon is a semantic search plugin for OpenCode, featuring hybrid search (semant
 ```bash
 brew install ollama
 ollama serve &
-ollama pull nomic-embed-text
+ollama pull all-minilm:22m
 ```
+
+> **Tip**: The default `all-minilm:22m` model has a 256-token context limit. Adjust your `context_limit` in config if using a different model.
 
 ### 2. Clone this repository
 
 ```bash
-git clone https://github.com/sagarmk/beacon-opencode
-cd beacon-opencode
+git clone https://github.com/keybangz/beacon-plugin
+cd beacon-plugin
 ```
 
-### 3. Add to OpenCode
+### 3. Build the Plugin
+
+```bash
+npm install
+npm run build
+```
+
+### 4. Add to OpenCode
 
 Copy the `.opencode/` directory from this repo into your project root, or add the plugin path to your project's `.opencode/opencode.json`:
 
@@ -40,7 +51,7 @@ Copy the `.opencode/` directory from this repo into your project root, or add th
 }
 ```
 
-### 4. Search Your Code
+### 5. Search Your Code
 
 ```bash
 # Initialize index
@@ -54,17 +65,6 @@ opencode search "authentication flow"
 
 - **[SETUP_OPENCODE.md](./SETUP_OPENCODE.md)** — Complete setup and usage guide for installing Beacon with OpenCode
 - **[EXAMPLES.md](./EXAMPLES.md)** — Real-world usage examples and workflows
-
-### 4. Start OpenCode
-
-```bash
-opencode
-```
-
-Beacon will automatically:
-1. Install dependencies (first run only)
-2. Index your codebase in the background
-3. Enable semantic search via the `search` tool
 
 ## Tools
 
@@ -88,6 +88,7 @@ Hybrid search combining semantic similarity, BM25 keyword matching, and identifi
 status          # Quick health check
 index           # Visual dashboard with coverage
 reindex         # Force full rebuild from scratch
+terminate-indexer  # Stop a running index operation
 ```
 
 ### Configuration
@@ -96,8 +97,8 @@ reindex         # Force full rebuild from scratch
 config view                          # View current config
 config set embedding.model llama2    # Change embedding model
 blacklist list                       # Show blacklisted dirs
-blacklist add ./secrets              # Exclude from indexing
-whitelist add ./vendor/important     # Allow in blacklisted dir
+ blacklist add ./secrets              # Exclude from indexing
+ whitelist add ./vendor/important     # Allow in blacklisted dir
 ```
 
 ## Architecture
@@ -105,41 +106,46 @@ whitelist add ./vendor/important     # Allow in blacklisted dir
 ### Project Structure
 
 ```
-beacon-opencode/
+beacon-plugin/
 ├── .opencode/
-│   ├── opencode.json           # Plugin config
-│   ├── package.json            # Dependencies for tools
-│   ├── plugins/
-│   │   └── beacon.ts           # Main plugin with event hooks
-│   └── tools/
-│       ├── search.ts           # Search tool
-│       ├── index.ts            # Index dashboard
-│       ├── status.ts           # Quick status
-│       ├── reindex.ts          # Full rebuild
-│       ├── config.ts           # Config management
-│       ├── blacklist.ts        # Exclude patterns
-│       └── whitelist.ts        # Include patterns
-├── src/
-│   └── lib/
-│       ├── types.ts            # TypeScript interfaces
-│       ├── db.ts               # SQLite + vector search (TODO)
-│       ├── tokenizer.ts        # BM25 + RRF algorithms
-│       ├── chunker.ts          # Code chunking
-│       ├── embedder.ts         # Embedding API coordination
-│       ├── config.ts           # Config loading + merging
-│       ├── git.ts              # File discovery
-│       ├── ignore.ts           # Pattern matching
-│       ├── repo-root.ts        # .git detection
-│       └── safety.ts           # Blacklist validation
+│   ├── src/
+│   │   └── lib/              # Compiled JavaScript (output of npm run build)
+│   │       ├── chunker.js
+│   │       ├── sync.js
+│   │       ├── embedder.js
+│   │       └── ...
+│   ├── tools/                # OpenCode tools (import compiled .js files)
+│   │   ├── search.ts
+│   │   ├── index.ts
+│   │   ├── status.ts
+│   │   ├── reindex.ts
+│   │   ├── config.ts
+│   │   ├── blacklist.ts
+│   │   ├── whitelist.ts
+│   │   ├── performance.ts
+│   │   └── terminate-indexer.ts
+│   └── plugins/
+│       └── beacon.ts         # Plugin entry point with event hooks
+├── src/lib/                  # TypeScript source
+│   ├── types.ts
+│   ├── db.ts
+│   ├── tokenizer.ts
+│   ├── chunker.ts
+│   ├── embedder.ts
+│   ├── config.ts
+│   ├── git.ts
+│   ├── ignore.ts
+│   ├── repo-root.ts
+│   └── safety.ts
 ├── config/
-│   └── beacon.default.json     # Default configuration
+│   └── beacon.default.json   # Default configuration
 ├── package.json
 └── tsconfig.json
 ```
 
 ### Event Hooks
 
-- **`tool.execute.after`** — Re-embed changed files; garbage collect deleted files (after write/shell tools)
+- **`tool.execute.after`** — Auto-reindex changed files (write_file, edit_file, str_replace_editor); garbage collect deleted files (rm, rmdir, git rm, git mv)
 - **`experimental.session.compacting`** — Inject index status before compaction
 - **`shell.env`** — Inject environment variables
 
@@ -153,102 +159,20 @@ beacon-opencode/
 - **File Scanning** — Git-based (git ls-files)
 - **Pattern Matching** — picomatch for glob patterns
 
-## Configuration
-
-### Default Configuration
-
-See `config/beacon.default.json`:
-
-```json
-{
-  "embedding": {
-    "api_base": "http://localhost:11434/v1",
-    "model": "nomic-embed-text",
-    "dimensions": 768,
-    "batch_size": 10,
-    "query_prefix": "search_query: "
-  },
-  "chunking": {
-    "strategy": "hybrid",
-    "max_tokens": 512,
-    "overlap_tokens": 50
-  },
-  "indexing": {
-    "include": ["**/*.ts", "**/*.tsx", "**/*.js", ...],
-    "exclude": ["node_modules/**", "dist/**", ...],
-    "max_file_size_kb": 500,
-    "auto_index": true,
-    "max_files": 10000,
-    "concurrency": 4
-  },
-  "search": {
-    "top_k": 10,
-    "similarity_threshold": 0.35,
-    "hybrid": {
-      "weight_vector": 0.4,
-      "weight_bm25": 0.3,
-      "weight_rrf": 0.3,
-      "identifier_boost": 1.5
-    }
-  },
-  "storage": {
-    "path": ".opencode/.beacon"
-  }
-}
-```
-
-### Per-Repo Overrides
-
-Create `.opencode/beacon.json`:
-
-```json
-{
-  "embedding": {
-    "api_base": "https://api.openai.com/v1",
-    "model": "text-embedding-3-small",
-    "api_key_env": "OPENAI_API_KEY",
-    "dimensions": 1536
-  },
-  "indexing": {
-    "include": ["**/*.py"],
-    "max_files": 5000
-  }
-}
-```
-
-## Development
-
-### Setup
-
-```bash
-npm install
-npm run build          # Build TypeScript
-npm run type-check    # Check types
-npm test              # Run tests
-```
-
-### Code Style
-
-- **TypeScript** with `strict: true`
-- **Functional programming** — prefer pure functions, immutability
-- **Explicit return types** for all public functions
-- **No `any` types** — use `unknown` or proper typing
-- **Inline comments** for complex logic and business rules
-
 ## Implementation Status
 
 - ✅ Type definitions and interfaces
 - ✅ Configuration management (loading, merging, validation)
 - ✅ File discovery (git integration)
 - ✅ Pattern matching (glob support)
-- ✅ Code chunking (token-based with overlap)
+- ✅ Code chunking (token-based with overlap, 80% safety margin, character-level truncation)
 - ✅ Tokenization (BM25, identifier extraction, RRF)
 - ✅ Embedding coordination (with retry logic)
-- ✅ Safety checks (blacklist validation)
+- ✅ Safety checks (blacklist validation, terminate-indexer with DB flag)
 - ✅ Database layer (SQLite + FTS5)
-- ✅ Tool implementations (search, index, status, reindex, config, blacklist, whitelist, performance)
-- ⏳ Vector search (sqlite-vec integration) — in progress
-- ⏳ Auto-sync hooks (incremental re-embedding, GC) — in progress
+- ✅ Tool implementations (search, index, status, reindex, config, blacklist, whitelist, performance, terminate-indexer)
+- ✅ Auto-sync hooks (incremental re-embedding, garbage collection)
+- ✅ Progress reporting with DB state tracking
 
 ## Troubleshooting
 
@@ -258,8 +182,18 @@ Start Ollama:
 
 ```bash
 ollama serve &
-ollama pull nomic-embed-text
+ollama pull all-minilm:22m
 ```
+
+### "Input length exceeds context length" errors
+
+This usually means `context_limit` in config exceeds the model's actual context window:
+
+1. Check model context: `ollama show <model_name> | grep context_length`
+2. Set `context_limit` in `.opencode/beacon.json` to match (e.g., 256 for all-minilm:22m)
+3. Rebuild and reindex: `npm run build && reindex`
+
+Beacon automatically applies an 80% safety margin, so set `context_limit` to the model's max, not the desired chunk size.
 
 ### Index corrupted
 
@@ -272,8 +206,8 @@ reindex
 ### Change embedding model
 
 1. Install new model: `ollama pull mxbai-embed-large`
-2. Update config: `.opencode/beacon.json`
-3. Rebuild: `reindex`
+2. Update config: `.opencode/beacon.json` with correct dimensions
+3. Rebuild: `npm run build && reindex`
 
 ## License
 
