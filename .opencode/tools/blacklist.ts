@@ -5,7 +5,7 @@
  */
 
 import { tool } from "@opencode-ai/plugin";
-import { getRepoRoot } from "../../src/lib/repo-root.ts";
+import { getRepoRoot } from "../src/lib/repo-root.js";
 import { join } from "path";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 

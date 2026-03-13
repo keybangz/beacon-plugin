@@ -3,22 +3,35 @@
  * Splits code into semantic chunks for embedding
  */
 /**
- * Count approximate tokens in text (rough estimation)
- * Uses word count * 1.3 as token estimate
+ * Count approximate tokens in text (conservative estimation for code)
+ * Uses ~3 characters per token instead of 4, because code is denser than
+ * prose: short identifiers, operators, and punctuation each consume a token
+ * even though they contain few characters. The conservative estimate prevents
+ * chunks from exceeding embedding-model context limits.
  * @param text - Text to count
  * @returns Approximate token count
  */
 function estimateTokens(text) {
-    const words = text.split(/\s+/).length;
-    return Math.ceil(words * 1.3);
+    // 3 chars/token is a safer estimate for source code.
+    // The standard BPE 4 chars/token rule applies to natural-language prose;
+    // code typically sits closer to 2-3 chars/token due to dense punctuation
+    // and single-character operators. Using 3 gives a ~33 % safety margin that
+    // prevents Ollama "input length exceeds context length" errors.
+    return Math.ceil(text.length / 3);
 }
 /**
  * Split code by syntax boundaries (functions, classes, imports, etc.)
  * @param code - Source code
  * @param maxTokens - Maximum tokens per chunk
  * @param overlapTokens - Overlap between chunks
+ * @param contextLimit - Optional embedding model context limit (applies 90% safety margin)
  * @returns Array of code chunks
- */ export function chunkCode(code, maxTokens = 512, overlapTokens = 50) {
+ */ export function chunkCode(code, maxTokens = 512, overlapTokens = 50, contextLimit) {
+    // Apply safety margin when context limit is provided
+    // Use the smaller of maxTokens or (contextLimit * 0.9) to account for tokenization differences
+    const effectiveMaxTokens = contextLimit !== undefined
+        ? Math.min(maxTokens, Math.floor(contextLimit * 0.9))
+        : maxTokens;
     const lines = code.split("\n");
     const chunks = [];
     let currentChunk = [];
@@ -28,9 +41,9 @@ function estimateTokens(text) {
     for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
         const lineTokens = estimateTokens(line);
-        // Check if adding this line would exceed max tokens
+        // Check if adding this line would exceed effective max tokens
         if (currentChunk.length > 0 &&
-            chunkTokens + lineTokens > maxTokens &&
+            chunkTokens + lineTokens > effectiveMaxTokens &&
             currentChunk.join("\n").length > 0) {
             // Save current chunk
             const chunkText = currentChunk.join("\n");
@@ -80,3 +93,4 @@ export function validateChunks(chunks) {
         }
     }
 }
+//# sourceMappingURL=chunker.js.map

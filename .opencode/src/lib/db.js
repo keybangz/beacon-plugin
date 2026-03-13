@@ -9,6 +9,7 @@
  * - sync_state: key-value store for indexing state
  */
 import { Database } from "bun:sqlite";
+import { statSync } from "fs";
 import { extractIdentifiers, prepareFTSQuery, getFileTypeMultiplier, getIdentifierBoost, } from "./tokenizer.js";
 import { SearchCache, PerformanceTimer } from "./cache.js";
 const SCHEMA_VERSION = 2;
@@ -20,18 +21,13 @@ function embeddingToBuffer(arr) {
     return Buffer.from(float32Array.buffer);
 }
 /**
- * Convert buffer back to embedding array
- */
-function bufferToEmbedding(buf) {
-    return Array.from(new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4));
-}
-/**
  * Beacon database class
  * Handles all database operations: schema creation, chunking, searching, state management
  */
 export class BeaconDatabase {
     constructor(dbPath, dimensions) {
         this.db = new Database(dbPath, { create: true });
+        this.dbPath = dbPath;
         this.dimensions = dimensions;
         this.searchCache = new SearchCache(1000, 300000); // 1000 items, 5 min TTL
         this.performanceMetrics = new Map();
@@ -43,6 +39,10 @@ export class BeaconDatabase {
     init() {
         // Set pragmas for performance (Bun:SQLite compatible)
         this.db.exec("PRAGMA journal_mode = WAL");
+        this.db.exec("PRAGMA synchronous = NORMAL"); // faster writes, still safe with WAL
+        this.db.exec("PRAGMA cache_size = -32000"); // 32MB page cache
+        this.db.exec("PRAGMA temp_store = MEMORY"); // temp tables in RAM
+        this.db.exec("PRAGMA mmap_size = 536870912"); // 512MB memory-mapped I/O
         this.db.exec("PRAGMA busy_timeout = 5000");
         this.db.exec("PRAGMA foreign_keys = ON");
         // Create main chunks table
@@ -167,34 +167,27 @@ export class BeaconDatabase {
         if (chunks.length !== embeddings.length) {
             throw new Error(`Chunk count mismatch: ${chunks.length} chunks but ${embeddings.length} embeddings`);
         }
+        // Pre-prepare statements once (outside transaction) for reuse
+        const deleteChunks = this.db.prepare("DELETE FROM chunks WHERE file_path = ?");
+        const deleteFts = this.db.prepare("DELETE FROM chunks_fts WHERE file_path = ?");
+        const insertChunk = this.db.prepare(`INSERT INTO chunks
+       (file_path, chunk_index, chunk_text, start_line, end_line, embedding, file_hash, identifiers)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
+        const lastInsertId = this.db.prepare("SELECT last_insert_rowid() as id");
+        const insertFts = this.db.prepare(`INSERT INTO chunks_fts(rowid, file_path, chunk_text, identifiers)
+       VALUES (?, ?, ?, ?)`);
         // Use transactions for atomicity
         const transaction = this.db.transaction(() => {
             // First, delete old chunks for this file
-            this.db.prepare("DELETE FROM chunks WHERE file_path = ?").run(filePath);
-            this.db.prepare("DELETE FROM chunks_fts WHERE file_path = ?").run(filePath);
-            // Insert new chunks
-            const insertChunk = this.db.prepare(`INSERT INTO chunks
-         (file_path, chunk_index, chunk_text, start_line, end_line, embedding, file_hash, identifiers)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
-            const insertFts = this.db.prepare(`INSERT INTO chunks_fts(rowid, file_path, chunk_text, identifiers)
-         VALUES (?, ?, ?, ?)`);
+            deleteChunks.run(filePath);
+            deleteFts.run(filePath);
             for (let i = 0; i < chunks.length; i++) {
                 const chunk = chunks[i];
                 const embedding = embeddings[i];
                 const identifiers = Array.from(extractIdentifiers(chunk.text)).join(" ");
-                // Insert into main table - prepare will execute with results
-                const chunkInsert = this.db.prepare(`INSERT INTO chunks
-           (file_path, chunk_index, chunk_text, start_line, end_line, embedding, file_hash, identifiers)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
-                chunkInsert.run(filePath, i, chunk.text, chunk.start_line, chunk.end_line, embeddingToBuffer(embedding), fileHash, identifiers);
-                // Get the ID of the inserted chunk
-                const lastIdQuery = this.db.prepare("SELECT last_insert_rowid() as id");
-                const lastIdResult = lastIdQuery.get();
-                const chunkId = lastIdResult.id;
-                // Insert into FTS table
-                const ftsInsert = this.db.prepare(`INSERT INTO chunks_fts(rowid, file_path, chunk_text, identifiers)
-           VALUES (?, ?, ?, ?)`);
-                ftsInsert.run(chunkId, filePath, chunk.text, identifiers);
+                insertChunk.run(filePath, i, chunk.text, chunk.start_line, chunk.end_line, embeddingToBuffer(embedding), fileHash, identifiers);
+                const chunkId = lastInsertId.get().id;
+                insertFts.run(chunkId, filePath, chunk.text, identifiers);
             }
         });
         transaction();
@@ -211,11 +204,12 @@ export class BeaconDatabase {
     }
     /**
      * Hybrid search: combines vector, BM25, and identifier matching
+     * When noHybrid=true, returns pure vector search results without BM25 combination
      */
-    search(queryEmbedding, topK, threshold, query, config, pathPrefix) {
-        // Check cache first
-        const cacheKey = `${query}:${topK}:${pathPrefix || ""}`;
-        const cachedResults = this.searchCache.get(query, { topK, pathPrefix });
+    search(queryEmbedding, topK, threshold, query, config, pathPrefix, noHybrid) {
+        // Check cache first (include noHybrid in options to avoid cross-mode cache hits)
+        const cacheOptions = { topK, pathPrefix, noHybrid: noHybrid ?? false };
+        const cachedResults = this.searchCache.get(query, cacheOptions);
         if (cachedResults) {
             return cachedResults;
         }
@@ -224,7 +218,14 @@ export class BeaconDatabase {
         const vectorResults = this.vectorSearch(queryEmbedding, topK * 2, pathPrefix);
         timer.mark("vector_search");
         let results;
-        if (vectorResults.length === 0) {
+        if (noHybrid) {
+            // Pure vector search - filter by threshold and return top K
+            results = vectorResults
+                .filter((r) => r.similarity >= threshold)
+                .slice(0, topK);
+            timer.mark("vector_only");
+        }
+        else if (vectorResults.length === 0) {
             // Fallback to FTS-only
             results = this.ftsOnlySearch(query, topK, pathPrefix);
             timer.mark("fts_fallback");
@@ -240,18 +241,96 @@ export class BeaconDatabase {
         // Record metrics
         this.recordMetric("search_time", timer.elapsed());
         // Cache results
-        this.searchCache.set(query, results, { topK, pathPrefix });
+        this.searchCache.set(query, results, cacheOptions);
         return results;
     }
     /**
      * Vector similarity search
-     * Note: Currently disabled due to sqlite-vec API compatibility issues
-     * Returns empty array to trigger BM25 fallback
+     * Performs cosine similarity in-process since sqlite-vec is not available in Bun runtime.
+     * Uses Float32Array directly (avoids Array.from conversion) for maximum throughput.
      */
     vectorSearch(queryEmbedding, limit, pathPrefix) {
-        // Vector search is currently unavailable
-        // BM25 search will be used as fallback
-        return [];
+        // Fetch all stored embeddings (with optional path filter)
+        let sql = `
+      SELECT file_path, start_line, end_line, chunk_text, embedding
+      FROM chunks
+    `;
+        const params = [];
+        if (pathPrefix) {
+            sql += " WHERE file_path LIKE ?";
+            params.push(`${pathPrefix}%`);
+        }
+        const rows = this.db.prepare(sql).all(...params);
+        if (rows.length === 0) {
+            return [];
+        }
+        // Pre-compute query as Float32Array and its magnitude (avoid recomputing per row)
+        const qVec = new Float32Array(queryEmbedding);
+        const dims = qVec.length;
+        let qMagSq = 0;
+        for (let i = 0; i < dims; i++)
+            qMagSq += qVec[i] * qVec[i];
+        if (qMagSq === 0)
+            return [];
+        const qMag = Math.sqrt(qMagSq);
+        const heap = [];
+        const heapSiftDown = (arr, i) => {
+            const n = arr.length;
+            while (true) {
+                let smallest = i;
+                const l = 2 * i + 1, r = 2 * i + 2;
+                if (l < n && arr[l][0] < arr[smallest][0])
+                    smallest = l;
+                if (r < n && arr[r][0] < arr[smallest][0])
+                    smallest = r;
+                if (smallest === i)
+                    break;
+                [arr[i], arr[smallest]] = [arr[smallest], arr[i]];
+                i = smallest;
+            }
+        };
+        const heapSiftUp = (arr, i) => {
+            while (i > 0) {
+                const parent = (i - 1) >> 1;
+                if (arr[parent][0] <= arr[i][0])
+                    break;
+                [arr[i], arr[parent]] = [arr[parent], arr[i]];
+                i = parent;
+            }
+        };
+        for (let rowIdx = 0; rowIdx < rows.length; rowIdx++) {
+            const buf = rows[rowIdx].embedding;
+            const vec = new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4);
+            if (vec.length !== dims)
+                continue;
+            let dot = 0, magSq = 0;
+            for (let i = 0; i < dims; i++) {
+                dot += qVec[i] * vec[i];
+                magSq += vec[i] * vec[i];
+            }
+            const sim = dot / (qMag * Math.sqrt(magSq));
+            if (heap.length < limit) {
+                heap.push([sim, rowIdx]);
+                heapSiftUp(heap, heap.length - 1);
+            }
+            else if (sim > heap[0][0]) {
+                // Replace root (smallest in heap) with new higher-scoring entry
+                heap[0] = [sim, rowIdx];
+                heapSiftDown(heap, 0);
+            }
+        }
+        // Sort descending by similarity and map to SearchResult
+        heap.sort((a, b) => b[0] - a[0]);
+        return heap.map(([sim, rowIdx]) => {
+            const row = rows[rowIdx];
+            return {
+                filePath: row.file_path,
+                startLine: row.start_line,
+                endLine: row.end_line,
+                chunkText: row.chunk_text,
+                similarity: sim,
+            };
+        });
     }
     /**
      * BM25 keyword search using FTS5
@@ -392,6 +471,8 @@ export class BeaconDatabase {
                     identifierBoost *
                     fileTypeMultiplier *
                     (weights.weight_rrf || 0.3);
+            // Surface the hybrid score as similarity so callers display the correct value
+            result.similarity = result.score;
             // Apply threshold
             if (result.score < threshold) {
                 combined.delete(`${result.filePath}:${result.startLine}`);
@@ -434,7 +515,15 @@ export class BeaconDatabase {
         return {
             files_indexed: filesResult.count,
             total_chunks: chunksResult.count,
-            database_size_mb: 0, // TODO: calculate from file size
+            database_size_mb: (() => {
+                try {
+                    const size = statSync(this.dbPath).size;
+                    return Math.round((size / (1024 * 1024)) * 100) / 100;
+                }
+                catch {
+                    return 0;
+                }
+            })(),
         };
     }
     /**
@@ -567,3 +656,4 @@ export class BeaconDatabase {
 export function openDatabase(dbPath, dimensions) {
     return new BeaconDatabase(dbPath, dimensions);
 }
+//# sourceMappingURL=db.js.map

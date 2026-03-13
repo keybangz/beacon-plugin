@@ -8,12 +8,12 @@
 import { tool } from "@opencode-ai/plugin";
 import { join } from "path";
 import { readFileSync } from "fs";
-import { openDatabase } from "../../src/lib/db.ts";
-import { Embedder } from "../../src/lib/embedder.ts";
-import { loadConfig } from "../../src/lib/config.ts";
-import { getRepoRoot } from "../../src/lib/repo-root.ts";
-import { formatBenchmarkResults, generatePerformanceReport } from "../../src/lib/benchmark.ts";
-import { PerformanceTimer } from "../../src/lib/cache.ts";
+import { openDatabase } from "../src/lib/db.js";
+import { Embedder } from "../src/lib/embedder.js";
+import { loadConfig } from "../src/lib/config.js";
+import { getRepoRoot } from "../src/lib/repo-root.js";
+import { formatBenchmarkResults, generatePerformanceReport } from "../src/lib/benchmark.js";
+import { PerformanceTimer } from "../src/lib/cache.js";
 
 export default tool({
   description: "Measure and analyze Beacon search and indexing performance",

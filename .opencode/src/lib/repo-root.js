@@ -38,3 +38,4 @@ export function getRepoRoot(startPath) {
     }
     return root;
 }
+//# sourceMappingURL=repo-root.js.map

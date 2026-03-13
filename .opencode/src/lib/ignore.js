@@ -1,18 +1,29 @@
 /**
  * File ignore pattern matching
- * Uses picomatch for glob pattern matching
+ * Uses picomatch for glob pattern matching with memoized compiled matchers
  */
 import pm from "picomatch";
 /**
- * Create a matcher function for glob patterns
+ * Memoized cache of compiled picomatch matchers keyed by a stable JSON key
+ * of the pattern array. Avoids recompiling 20+ glob patterns for every file
+ * during indexing (savings: ~400K compilations for 10K files × 20 patterns).
+ */
+const matcherCache = new Map();
+/**
+ * Create (or retrieve from cache) a matcher function for glob patterns.
  * @param patterns - Array of glob patterns
  * @returns Function that returns true if path matches any pattern
  */
 function createMatcher(patterns) {
+    // Use JSON.stringify as a stable key — pattern arrays are small so this is cheap
+    const cacheKey = JSON.stringify(patterns);
+    const cached = matcherCache.get(cacheKey);
+    if (cached)
+        return cached;
     const matchers = patterns.map((pattern) => pm(pattern, { dot: true }));
-    return (path) => {
-        return matchers.some((matcher) => matcher(path));
-    };
+    const matcher = (path) => matchers.some((m) => m(path));
+    matcherCache.set(cacheKey, matcher);
+    return matcher;
 }
 /**
  * Determine if a file should be indexed
@@ -47,3 +58,4 @@ export function validatePatterns(patterns) {
         }
     }
 }
+//# sourceMappingURL=ignore.js.map

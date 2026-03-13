@@ -91,3 +91,4 @@ export function validatePathSafety(path) {
         throw new Error(`Path is blacklisted: ${path}`);
     }
 }
+//# sourceMappingURL=safety.js.map

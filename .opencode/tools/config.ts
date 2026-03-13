@@ -5,11 +5,11 @@
  */
 
 import { tool } from "@opencode-ai/plugin";
-import { getRepoRoot } from "../../src/lib/repo-root.ts";
-import { loadConfig, validateConfig } from "../../src/lib/config.ts";
+import { getRepoRoot } from "../src/lib/repo-root.js";
+import { loadConfig, validateConfig } from "../src/lib/config.js";
 import { join } from "path";
 import { readFileSync, writeFileSync, existsSync } from "fs";
-import type { BeaconConfig } from "../../src/lib/types.ts";
+import type { BeaconConfig } from "../src/lib/types.js";
 
 /**
  * Set a nested value in an object using dot notation (e.g., "embedding.model")

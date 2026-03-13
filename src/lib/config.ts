@@ -193,4 +193,19 @@ export function validateConfig(config: unknown): asserts config is BeaconConfig 
   if (!storage.path) {
     throw new Error("Invalid storage configuration");
   }
+
+  // Validate chunking vs embedding context limits
+  const chunking = cfg.chunking as Record<string, unknown>;
+  const contextLimit = embedding.context_limit as number | undefined;
+  const maxTokens = chunking.max_tokens as number | undefined;
+
+  if (contextLimit !== undefined && maxTokens !== undefined) {
+    if (maxTokens > contextLimit) {
+      console.warn(
+        `⚠️  Warning: chunking.max_tokens (${maxTokens}) exceeds embedding.context_limit (${contextLimit}). ` +
+        `This may cause chunks to be truncated during embedding. ` +
+        `Consider setting max_tokens <= context_limit or removing context_limit to use max_tokens.`
+      );
+    }
+  }
 }

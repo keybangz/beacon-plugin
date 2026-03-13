@@ -4,7 +4,7 @@
  *
  * This tool helps identify bottlenecks and track performance improvements over time
  */
-import { PerformanceTimer } from "../lib/cache.js";
+import { PerformanceTimer } from "./cache.js";
 /**
  * Benchmark search performance
  */
@@ -115,16 +115,23 @@ export function generatePerformanceReport(results, title = "Beacon Performance R
     report += `Generated: ${new Date().toISOString()}\n`;
     report += `${"=".repeat(50)}\n\n`;
     // Summary statistics
-    const avgDuration = results.reduce((sum, r) => sum + r.duration, 0) / results.length;
-    const maxDuration = Math.max(...results.map((r) => r.duration));
-    const minDuration = Math.min(...results.map((r) => r.duration));
     report += "📊 SUMMARY\n";
     report += `  Operations: ${results.length}\n`;
-    report += `  Avg Duration: ${avgDuration.toFixed(2)}ms\n`;
-    report += `  Min Duration: ${minDuration.toFixed(2)}ms\n`;
-    report += `  Max Duration: ${maxDuration.toFixed(2)}ms\n\n`;
+    if (results.length > 0) {
+        const avgDuration = results.reduce((sum, r) => sum + r.duration, 0) / results.length;
+        const maxDuration = Math.max(...results.map((r) => r.duration));
+        const minDuration = Math.min(...results.map((r) => r.duration));
+        report += `  Avg Duration: ${avgDuration.toFixed(2)}ms\n`;
+        report += `  Min Duration: ${minDuration.toFixed(2)}ms\n`;
+        report += `  Max Duration: ${maxDuration.toFixed(2)}ms\n`;
+    }
+    else {
+        report += "  No operations recorded yet.\n";
+    }
+    report += "\n";
     // Detailed results
     report += "📈 DETAILED RESULTS\n";
     report += formatBenchmarkResults(results);
     return report;
 }
+//# sourceMappingURL=benchmark.js.map

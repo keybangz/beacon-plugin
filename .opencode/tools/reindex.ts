@@ -5,11 +5,11 @@
  */
 
 import { tool } from "@opencode-ai/plugin";
-import { getRepoRoot } from "../../src/lib/repo-root.ts";
-import { loadConfig } from "../../src/lib/config.ts";
-import { openDatabase } from "../../src/lib/db.ts";
-import { Embedder } from "../../src/lib/embedder.ts";
-import { IndexCoordinator } from "../../src/lib/sync.ts";
+import { getRepoRoot } from "../src/lib/repo-root.js";
+import { loadConfig } from "../src/lib/config.js";
+import { openDatabase } from "../src/lib/db.js";
+import { Embedder } from "../src/lib/embedder.js";
+import { IndexCoordinator } from "../src/lib/sync.js";
 import { join } from "path";
 import { mkdirSync, existsSync, unlinkSync, rmSync } from "fs";
 

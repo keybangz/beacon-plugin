@@ -3,6 +3,28 @@
  * Implements BM25, identifier extraction, and RRF (Reciprocal Rank Fusion)
  */
 /**
+ * Estimate token count for a text string
+ * Uses ~3 chars/token which is conservative for code (dense with punctuation/operators)
+ * @param text - Text to estimate
+ * @returns Approximate token count
+ */
+export function estimateTokens(text) {
+    return Math.ceil(text.length / 3);
+}
+/**
+ * Truncate text to fit within a token limit
+ * Uses character estimation (3 chars/token) for quick truncation
+ * @param text - Text to truncate
+ * @param maxTokens - Maximum tokens allowed
+ * @returns Truncated text
+ */
+export function truncateToTokenLimit(text, maxTokens) {
+    const maxChars = maxTokens * 3;
+    if (text.length <= maxChars)
+        return text;
+    return text.slice(0, maxChars);
+}
+/**
  * Extract programming identifiers from code (variables, functions, classes)
  * @param code - Source code
  * @returns Set of extracted identifiers
@@ -199,3 +221,4 @@ export function prepareFTSQuery(query) {
     // Create a query with OR operators for flexibility
     return words.join(" OR ");
 }
+//# sourceMappingURL=tokenizer.js.map

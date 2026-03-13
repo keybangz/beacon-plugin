@@ -224,12 +224,13 @@ export class IndexCoordinator {
       return 0;
     }
 
-    // Pre-chunk all files
+    // Pre-chunk all files - pass context_limit for safety margin
     const chunkedFiles = filesToProcess.map((file) => {
       const chunks = chunkCode(
         file.content,
         this.config.chunking.max_tokens,
-        this.config.chunking.overlap_tokens
+        this.config.chunking.overlap_tokens,
+        this.config.embedding.context_limit
       );
       return {
         path: file.path,
@@ -308,11 +309,12 @@ export class IndexCoordinator {
         return false; // No change
       }
 
-      // Chunk the file
+      // Chunk the file - pass context_limit for safety margin
       const chunks = chunkCode(
         content,
         this.config.chunking.max_tokens,
-        this.config.chunking.overlap_tokens
+        this.config.chunking.overlap_tokens,
+        this.config.embedding.context_limit
       );
 
       if (chunks.length === 0) {

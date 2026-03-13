@@ -32,12 +32,19 @@ function estimateTokens(text: string): number {
  * @param code - Source code
  * @param maxTokens - Maximum tokens per chunk
  * @param overlapTokens - Overlap between chunks
+ * @param contextLimit - Optional embedding model context limit (applies 90% safety margin)
  * @returns Array of code chunks
  */export function chunkCode(
   code: string,
   maxTokens: number = 512,
-  overlapTokens: number = 50
+  overlapTokens: number = 50,
+  contextLimit?: number
 ): ChunkResult[] {
+  // Apply safety margin when context limit is provided
+  // Use the smaller of maxTokens or (contextLimit * 0.9) to account for tokenization differences
+  const effectiveMaxTokens = contextLimit !== undefined
+    ? Math.min(maxTokens, Math.floor(contextLimit * 0.9))
+    : maxTokens;
   const lines: string[] = code.split("\n");
   const chunks: ChunkResult[] = [];
   let currentChunk: string[] = [];
@@ -49,10 +56,10 @@ function estimateTokens(text: string): number {
     const line: string = lines[i];
     const lineTokens: number = estimateTokens(line);
 
-    // Check if adding this line would exceed max tokens
+    // Check if adding this line would exceed effective max tokens
     if (
       currentChunk.length > 0 &&
-      chunkTokens + lineTokens > maxTokens &&
+      chunkTokens + lineTokens > effectiveMaxTokens &&
       currentChunk.join("\n").length > 0
     ) {
       // Save current chunk

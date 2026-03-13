@@ -144,4 +144,16 @@ export function validateConfig(config) {
     if (!storage.path) {
         throw new Error("Invalid storage configuration");
     }
+    // Validate chunking vs embedding context limits
+    const chunking = cfg.chunking;
+    const contextLimit = embedding.context_limit;
+    const maxTokens = chunking.max_tokens;
+    if (contextLimit !== undefined && maxTokens !== undefined) {
+        if (maxTokens > contextLimit) {
+            console.warn(`⚠️  Warning: chunking.max_tokens (${maxTokens}) exceeds embedding.context_limit (${contextLimit}). ` +
+                `This may cause chunks to be truncated during embedding. ` +
+                `Consider setting max_tokens <= context_limit or removing context_limit to use max_tokens.`);
+        }
+    }
 }
+//# sourceMappingURL=config.js.map

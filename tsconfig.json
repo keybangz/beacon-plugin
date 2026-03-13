@@ -8,8 +8,8 @@
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
-    "outDir": "./dist",
-    "rootDir": "./src",
+    "outDir": "./.opencode/src/lib",
+    "rootDir": "./src/lib",
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
@@ -29,12 +29,12 @@
     "alwaysStrict": true
   },
   "include": [
-    "src/**/*"
+    "src/lib/**/*"
   ],
   "exclude": [
     "node_modules",
     "dist",
-    ".opencode",
-    "tests"
+    "tests",
+    ".opencode"
   ]
 }

@@ -123,17 +123,20 @@ export class Embedder {
 
   /**
    * Truncate text to stay within the embedding model's context window.
-   * Uses a conservative 3-char/token estimate (same as chunker.ts) and
-   * clips at `maxTokens * 3` characters as a hard ceiling.
+   * Uses a conservative 3-char/token estimate with 90% safety margin
+   * to account for tokenization differences between our estimator and
+   * the actual embedding model.
    * This is a last-resort safety net; the chunker should already produce
    * correctly-sized chunks, but oversized inputs to Ollama cause hard
    * "input length exceeds context length" errors that silently drop chunks.
    * @param text - Input text
-   * @param maxTokens - Maximum allowed tokens
+   * @param maxTokens - Maximum allowed tokens (will apply 90% safety margin)
    * @returns Truncated text
    */
   private truncateToContextLimit(text: string, maxTokens: number): string {
-    const maxChars = maxTokens * 3; // 3 chars/token conservative estimate
+    // Apply 90% safety margin to account for tokenization differences
+    const safeMaxTokens = Math.floor(maxTokens * 0.9);
+    const maxChars = safeMaxTokens * 3; // 3 chars/token conservative estimate
     if (text.length <= maxChars) return text;
     return text.slice(0, maxChars);
   }
@@ -153,9 +156,9 @@ export class Embedder {
     }
 
     // Hard-truncate any document that exceeds the model context window.
-    // The chunker already tries to stay within max_tokens but may produce
-    // slightly oversized chunks due to token estimation error.
-    console.log(`Truncating ${documents.length} documents to context limit of ${this.contextLimit} tokens`);
+    // The chunker now applies a 90% safety margin, but this provides an
+    // additional safety net for tokenization differences.
+    console.log(`Truncating ${documents.length} documents to context limit of ${this.contextLimit} tokens (with 90% safety margin)`);
     documents = documents.map((d) => this.truncateToContextLimit(d, this.contextLimit));
 
     const batchSize = this.config.batch_size ?? 50;

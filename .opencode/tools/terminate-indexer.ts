@@ -4,7 +4,7 @@
  */
 
 import { tool } from "@opencode-ai/plugin";
-import { terminateIndexer, isIndexerRunning } from "../../src/lib/sync.ts";
+import { terminateIndexer, isIndexerRunning } from "../src/lib/sync.js";
 
 export default tool({
   description:
