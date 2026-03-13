@@ -87,10 +87,10 @@ function deepMergeObjects(
  * @returns Default Beacon configuration
  */
 function loadDefaultConfig(): BeaconConfig {
+  // Get repo root first to build absolute path to config
+  const repoRoot = getRepoRoot();
   const defaultConfigPath: string = join(
-    import.meta.dirname ?? process.cwd(),
-    "..",
-    "..",
+    repoRoot,
     "config",
     "beacon.default.json"
   );

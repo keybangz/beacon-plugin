@@ -62,7 +62,9 @@ function deepMergeObjects(target, source) {
  * @returns Default Beacon configuration
  */
 function loadDefaultConfig() {
-    const defaultConfigPath = join(import.meta.dirname ?? process.cwd(), "..", "..", "config", "beacon.default.json");
+    // Get repo root first to build absolute path to config
+    const repoRoot = getRepoRoot();
+    const defaultConfigPath = join(repoRoot, "config", "beacon.default.json");
     if (!existsSync(defaultConfigPath)) {
         throw new Error(`Default config not found at ${defaultConfigPath}`);
     }
