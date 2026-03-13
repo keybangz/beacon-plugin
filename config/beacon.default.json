@@ -6,12 +6,12 @@
     "dimensions": 384,
     "batch_size": 50,
     "query_prefix": "",
-    "context_limit": 512
+    "context_limit": 256
   },
   "chunking": {
     "strategy": "hybrid",
-    "max_tokens": 512,
-    "overlap_tokens": 64
+    "max_tokens": 256,
+    "overlap_tokens": 32
   },
   "indexing": {
     "include": [
