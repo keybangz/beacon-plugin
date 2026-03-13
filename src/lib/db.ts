@@ -1,16 +1,15 @@
 /**
  * Beacon Database Layer
- * SQLite with sqlite-vec for vector search and FTS5 for keyword matching
+ * SQLite with FTS5 for keyword matching
+ * Ported to Bun:SQLite for OpenCode compatibility
  *
  * Schema:
  * - chunks: source code chunks with embeddings and metadata
- * - chunks_vec: virtual table for vector similarity search
  * - chunks_fts: FTS5 for full-text search
  * - sync_state: key-value store for indexing state
  */
 
-import Database from "better-sqlite3";
-import * as sqliteVec from "sqlite-vec";
+import { Database } from "bun:sqlite";
 import type {
   Chunk,
   SearchResult,
@@ -29,11 +28,18 @@ import { SearchCache, PerformanceTimer } from "./cache.js";
 const SCHEMA_VERSION = 2;
 
 /**
- * Convert embedding array to float32 buffer for sqlite-vec
+ * Convert embedding array to buffer for storage
  */
-function float32Buffer(arr: number[]): Buffer {
+function embeddingToBuffer(arr: number[]): Buffer {
   const float32Array = new Float32Array(arr);
   return Buffer.from(float32Array.buffer);
+}
+
+/**
+ * Convert buffer back to embedding array
+ */
+function bufferToEmbedding(buf: Buffer): number[] {
+  return Array.from(new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4));
 }
 
 /**
@@ -41,13 +47,13 @@ function float32Buffer(arr: number[]): Buffer {
  * Handles all database operations: schema creation, chunking, searching, state management
  */
 export class BeaconDatabase {
-  private db: Database.Database;
+  private db: Database;
   private dimensions: number;
   private searchCache: SearchCache;
   private performanceMetrics: Map<string, number[]>;
 
   constructor(dbPath: string, dimensions: number) {
-    this.db = new Database(dbPath);
+    this.db = new Database(dbPath, { create: true });
     this.dimensions = dimensions;
     this.searchCache = new SearchCache(1000, 300000); // 1000 items, 5 min TTL
     this.performanceMetrics = new Map();
@@ -58,13 +64,10 @@ export class BeaconDatabase {
    * Initialize database schema and load extensions
    */
   private init(): void {
-    // Load sqlite-vec extension for vector search
-    sqliteVec.load(this.db);
-
-    // Set pragmas for performance
-    this.db.pragma("journal_mode = WAL");
-    this.db.pragma("busy_timeout = 5000");
-    this.db.pragma("foreign_keys = ON");
+    // Set pragmas for performance (Bun:SQLite compatible)
+    this.db.exec("PRAGMA journal_mode = WAL");
+    this.db.exec("PRAGMA busy_timeout = 5000");
+    this.db.exec("PRAGMA foreign_keys = ON");
 
     // Create main chunks table
     this.db.exec(`
@@ -102,13 +105,8 @@ export class BeaconDatabase {
       )
     `);
 
-    // Create vector table with cosine distance metric
-    this.db.exec(`
-      CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec USING vec0(
-        chunk_id INTEGER PRIMARY KEY,
-        embedding float[${this.dimensions}] distance_metric=cosine
-      )
-    `);
+    // Note: Vector table (chunks_vec) removed - using BM25 search via FTS5 instead
+    // sqlite-vec is not available in Bun runtime
 
     // Migrate to schema v2
     this.migrateToV2();
@@ -180,28 +178,32 @@ export class BeaconDatabase {
 
   /**
    * Check if database dimensions match config
+   * Note: With BM25-only search, dimensions are not stored in database
+   * This method returns ok:true since embeddings are stored in chunks table
    */
   checkDimensions(): DimensionCheck {
     try {
+      // Check if chunks table exists and has data
       const result = this.db
-        .prepare("SELECT COUNT(*) as count FROM chunks_vec LIMIT 1")
-        .get() as { count: number };
+        .prepare("SELECT COUNT(*) as count FROM chunks LIMIT 1")
+        .get() as { count: number } | undefined;
 
-      if (result.count === 0) {
+      if (!result || result.count === 0) {
         // Empty database, dimensions are ok
         return { ok: true, stored: this.dimensions, current: this.dimensions };
       }
 
-      // Try to query vector table to verify dimensions
-      const sampleVec = this.db
-        .prepare("SELECT embedding FROM chunks_vec LIMIT 1")
+      // Sample an embedding to verify it can be retrieved
+      const sampleRow = this.db
+        .prepare("SELECT embedding FROM chunks LIMIT 1")
         .get() as { embedding: Buffer } | undefined;
 
-      if (!sampleVec) {
+      if (!sampleRow) {
         return { ok: true, stored: this.dimensions, current: this.dimensions };
       }
 
-      const storedDims = sampleVec.embedding.length / 4; // 4 bytes per float32
+      // Verify embedding buffer is correct size for dimensions
+      const storedDims = sampleRow.embedding.length / 4; // 4 bytes per float32
       const ok = storedDims === this.dimensions;
 
       return {
@@ -229,36 +231,24 @@ export class BeaconDatabase {
       );
     }
 
-    const insertChunk = this.db.prepare(
-      `INSERT OR REPLACE INTO chunks
-       (file_path, chunk_index, chunk_text, start_line, end_line, embedding, file_hash, identifiers)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    );
-
-    // Note: sqlite-vec might have issues with parameter binding, so we'll handle it specially
-    const insertFts = this.db.prepare(
-      `INSERT OR REPLACE INTO chunks_fts (rowid, file_path, chunk_text, identifiers)
-       SELECT id, file_path, chunk_text, identifiers FROM chunks WHERE file_path = ? AND chunk_index = ?`
-    );
-
+    // Use transactions for atomicity
     const transaction = this.db.transaction(() => {
-      // First, delete old chunks and their vectors for this file
-      const oldIds = this.db
-        .prepare("SELECT id FROM chunks WHERE file_path = ?")
-        .all(filePath) as Array<{ id: number }>;
-      
-      for (const row of oldIds) {
-        this.db
-          .prepare("DELETE FROM chunks_vec WHERE chunk_id = ?")
-          .run(row.id);
-      }
-      
+      // First, delete old chunks for this file
       this.db.prepare("DELETE FROM chunks WHERE file_path = ?").run(filePath);
-      this.db
-        .prepare("DELETE FROM chunks_fts WHERE file_path = ?")
-        .run(filePath);
+      this.db.prepare("DELETE FROM chunks_fts WHERE file_path = ?").run(filePath);
 
       // Insert new chunks
+      const insertChunk = this.db.prepare(
+        `INSERT INTO chunks
+         (file_path, chunk_index, chunk_text, start_line, end_line, embedding, file_hash, identifiers)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      );
+
+      const insertFts = this.db.prepare(
+        `INSERT INTO chunks_fts(rowid, file_path, chunk_text, identifiers)
+         VALUES (?, ?, ?, ?)`
+      );
+
       for (let i = 0; i < chunks.length; i++) {
         const chunk = chunks[i];
         const embedding = embeddings[i];
@@ -266,24 +256,36 @@ export class BeaconDatabase {
           extractIdentifiers(chunk.text)
         ).join(" ");
 
-        // Insert into main table
-        insertChunk.run(
+        // Insert into main table - prepare will execute with results
+        const chunkInsert = this.db.prepare(
+          `INSERT INTO chunks
+           (file_path, chunk_index, chunk_text, start_line, end_line, embedding, file_hash, identifiers)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        );
+        
+        chunkInsert.run(
           filePath,
           i,
           chunk.text,
           chunk.start_line,
           chunk.end_line,
-          float32Buffer(embedding),
+          embeddingToBuffer(embedding),
           fileHash,
           identifiers
         );
 
-        // Note: Vector table insertion is skipped due to sqlite-vec API issues
-        // The embeddings are stored in the chunks table BLOB field for future use
-        // BM25 search via FTS5 is fully functional as a fallback
+        // Get the ID of the inserted chunk
+        const lastIdQuery = this.db.prepare("SELECT last_insert_rowid() as id");
+        const lastIdResult = lastIdQuery.get() as { id: number };
+        const chunkId = lastIdResult.id;
 
         // Insert into FTS table
-        insertFts.run(filePath, i);
+        const ftsInsert = this.db.prepare(
+          `INSERT INTO chunks_fts(rowid, file_path, chunk_text, identifiers)
+           VALUES (?, ?, ?, ?)`
+        );
+        
+        ftsInsert.run(chunkId, filePath, chunk.text, identifiers);
       }
     });
 
@@ -296,9 +298,7 @@ export class BeaconDatabase {
   deleteChunks(filePath: string): void {
     const transaction = this.db.transaction(() => {
       this.db.prepare("DELETE FROM chunks WHERE file_path = ?").run(filePath);
-      this.db
-        .prepare("DELETE FROM chunks_fts WHERE file_path = ?")
-        .run(filePath);
+      this.db.prepare("DELETE FROM chunks_fts WHERE file_path = ?").run(filePath);
     });
 
     transaction();
@@ -715,7 +715,7 @@ export class BeaconDatabase {
     const transaction = this.db.transaction(() => {
       this.db.exec("DELETE FROM chunks");
       this.db.exec("DELETE FROM chunks_fts");
-      this.db.exec("DELETE FROM chunks_vec");
+      // Note: chunks_vec table removed - no longer using sqlite-vec
       this.clearSyncProgress();
     });
 
