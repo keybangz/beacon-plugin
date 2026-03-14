@@ -1,9 +1,5 @@
 {
   "dependencies": {
-    "@opencode-ai/plugin": "1.2.25",
-    "@opencode-ai/sdk": "1.2.25",
-    "picomatch": "^4.0.0",
-    "zod": "^3.22.0",
-    "@kilocode/plugin": "7.0.46"
+    "@opencode-ai/plugin": "1.2.26"
   }
 }

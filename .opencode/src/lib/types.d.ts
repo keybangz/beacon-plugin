@@ -17,6 +17,8 @@ export interface EmbeddingConfig {
     query_prefix: string;
     /** Model context limit in tokens (for hard-truncation). Defaults to 256. */
     context_limit?: number;
+    /** Enable/disable embedding generation. When false, uses BM25-only search. */
+    enabled?: boolean;
 }
 export interface ChunkingConfig {
     /** Chunking strategy: "hybrid" combines syntax and semantic boundaries */

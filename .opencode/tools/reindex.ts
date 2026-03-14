@@ -43,13 +43,19 @@ export default tool({
         if (existsSync(f)) unlinkSync(f);
       }
 
+      // Also delete HNSW index files to ensure fresh index
+      const hnswIndexFile = join(storagePath, "hnsw.index");
+      const hnswEntriesFile = join(storagePath, "hnsw.entries.json");
+      if (existsSync(hnswIndexFile)) unlinkSync(hnswIndexFile);
+      if (existsSync(hnswEntriesFile)) unlinkSync(hnswEntriesFile);
+
       // Initialize database
       const db = openDatabase(dbPath, config.embedding.dimensions);
 
       try {
         // Initialize embedder - use context_limit if set, otherwise chunking max_tokens
         const effectiveContextLimit = config.embedding.context_limit ?? config.chunking.max_tokens;
-        const embedder = new Embedder(config.embedding, effectiveContextLimit);
+        const embedder = new Embedder(config.embedding, effectiveContextLimit, storagePath);
 
         // Create index coordinator
         const coordinator = new IndexCoordinator(

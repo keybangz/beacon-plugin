@@ -92,7 +92,7 @@ function createMockEmbedding(text: string, dimensions: number = 384): number[] {
 // Setup and teardown
 beforeEach(() => {
   testDbPath = createTestDatabase();
-  db = openDatabase(testDbPath, 384);
+  db = openDatabase(testDbPath, 384, false); // Disable HNSW for unit tests
 });
 
 afterEach(() => {

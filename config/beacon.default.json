@@ -1,16 +1,15 @@
 {
   "embedding": {
-    "api_base": "http://localhost:11434/v1",
-    "model": "all-minilm:22m",
-    "api_key_env": "",
+    "api_base": "local",
+    "model": "all-MiniLM-L6-v2",
     "dimensions": 384,
-    "batch_size": 50,
-    "query_prefix": "",
-    "context_limit": 256
+    "batch_size": 32,
+    "context_limit": 256,
+    "enabled": true
   },
   "chunking": {
     "strategy": "hybrid",
-    "max_tokens": 256,
+    "max_tokens": 512,
     "overlap_tokens": 32
   },
   "indexing": {
@@ -41,11 +40,11 @@
     "max_file_size_kb": 500,
     "auto_index": true,
     "max_files": 10000,
-    "concurrency": 8
+    "concurrency": 4
   },
   "search": {
     "top_k": 10,
-    "similarity_threshold": 0.35,
+    "similarity_threshold": 0.01,
     "hybrid": {
       "enabled": true,
       "weight_vector": 0.4,

@@ -1,65 +1,91 @@
 # Beacon OpenCode Plugin
 
-**Turn OpenCode into Cursor** — Semantic code search that understands your codebase. Find code by meaning, not just string matching.
-
-Beacon is a semantic search plugin for OpenCode, featuring hybrid search (semantic embeddings + BM25 keyword matching + identifier boosting).
+**Semantic grep replacement for OpenCode** — Search code by meaning, not just string matching. Beacon replaces the built-in grep tool with hybrid semantic search (embeddings + BM25 + identifier boosting).
 
 ## Features
 
-- **Hybrid Search** — Combines vector embeddings, BM25 keyword matching, and identifier boosting for best results
-- **Smart Indexing** — Full index on first run, diff-based catch-up on subsequent syncs
-- **Auto-Sync** — Hooks auto-embed changed files and garbage collect deleted ones
+- **Grep Replacement** — Seamlessly replaces OpenCode's grep with semantic search
+- **Hybrid Search** — Combines vector embeddings, BM25 keyword matching, and identifier boosting
+- **HNSW Index** — O(log n) approximate nearest neighbor search for fast vector queries
+- **Local Embeddings** — Optional ONNX runtime for zero-latency embeddings (no HTTP calls)
+- **Real-time Sync** — File watcher auto-indexes changes as you code
+- **Auto-Sync Hooks** — Auto-reindex changed files, garbage collect deleted ones
 - **Graceful Degradation** — Falls back to keyword-only search if embedding server is down
-- **Pluggable Embeddings** — Ollama (local/free), OpenAI, Voyage AI, LiteLLM, or any OpenAI-compatible API
+- **Pluggable Embeddings** — Ollama (local/free), OpenAI, Voyage AI, LiteLLM, ONNX, or any OpenAI-compatible API
 - **Strict TypeScript** — Fully typed with `strict: true` for reliability
-- **Safe Chunking** — 80% safety margin with character-level truncation to prevent context errors
-- **Graceful Termination** — Stop indexing operations with `terminate-indexer` tool
+- **Safe Chunking** — 80% safety margin with character-level truncation
 
 ## Quick Start
 
-### 1. Install Ollama (for local embeddings)
+### Option A: Install from NPM (Recommended)
 
+```bash
+npm install beacon-opencode
+```
+
+Then add to your project's `.opencode/opencode.json`:
+```json
+{
+  "plugin": ["beacon-opencode"]
+}
+```
+
+### Option B: Install from Source
+
+```bash
+git clone https://github.com/sagarmk/beacon-opencode
+cd beacon-opencode
+npm install
+npm run build
+```
+
+Then add to your `.opencode/opencode.json`:
+```json
+{
+  "plugin": ["./path/to/beacon-opencode/.opencode/plugins/beacon.ts"]
+}
+```
+
+### Configure Embeddings
+
+**Option 1: Local ONNX (Zero HTTP latency)**
+```json
+// .opencode/beacon.json
+{
+  "embedding": {
+    "api_base": "local"
+  }
+}
+```
+
+**Option 2: Ollama (Local/Free)**
 ```bash
 brew install ollama
 ollama serve &
 ollama pull all-minilm:22m
 ```
 
-> **Tip**: The default `all-minilm:22m` model has a 256-token context limit. Adjust your `context_limit` in config if using a different model.
-
-### 2. Clone this repository
-
-```bash
-git clone https://github.com/keybangz/beacon-plugin
-cd beacon-plugin
-```
-
-### 3. Build the Plugin
-
-```bash
-npm install
-npm run build
-```
-
-### 4. Add to OpenCode
-
-Copy the `.opencode/` directory from this repo into your project root, or add the plugin path to your project's `.opencode/opencode.json`:
-
+**Option 3: OpenAI/Voyage/etc.**
 ```json
 {
-  "plugin": ["./path/to/beacon-plugin/.opencode/plugins/beacon.ts"]
+  "embedding": {
+    "api_base": "https://api.openai.com/v1",
+    "api_key": "your-key",
+    "model": "text-embedding-3-small"
+  }
 }
 ```
 
-### 5. Search Your Code
+### Search Your Code
 
-```bash
-# Initialize index
-opencode reindex
-
-# Search semantically
-opencode search "authentication flow"
 ```
+# Initialize index
+reindex
+
+# Search semantically (replaces grep)
+search "authentication flow"
+search "database connection logic"
+search "error handling in API"
 
 ## Documentation
 

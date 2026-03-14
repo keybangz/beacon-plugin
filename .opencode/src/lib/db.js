@@ -10,8 +10,10 @@
  */
 import { Database } from "bun:sqlite";
 import { statSync } from "fs";
+import { dirname } from "path";
 import { extractIdentifiers, prepareFTSQuery, getFileTypeMultiplier, getIdentifierBoost, } from "./tokenizer.js";
 import { SearchCache, PerformanceTimer } from "./cache.js";
+import { HNSWVectorIndex } from "./hnsw.js";
 const SCHEMA_VERSION = 2;
 /**
  * Convert embedding array to buffer for storage
@@ -25,13 +27,21 @@ function embeddingToBuffer(arr) {
  * Handles all database operations: schema creation, chunking, searching, state management
  */
 export class BeaconDatabase {
-    constructor(dbPath, dimensions) {
+    constructor(dbPath, dimensions, useHNSW = true) {
+        this.hnswIndex = null;
+        this.useHNSW = true;
         this.db = new Database(dbPath, { create: true });
         this.dbPath = dbPath;
         this.dimensions = dimensions;
-        this.searchCache = new SearchCache(1000, 300000); // 1000 items, 5 min TTL
+        this.searchCache = new SearchCache(1000, 300000);
         this.performanceMetrics = new Map();
+        this.useHNSW = useHNSW;
         this.init();
+        if (this.useHNSW) {
+            const storagePath = dirname(dbPath);
+            this.hnswIndex = new HNSWVectorIndex(dimensions, storagePath);
+            this.hnswIndex.initialize();
+        }
     }
     /**
      * Initialize database schema and load extensions
@@ -167,7 +177,9 @@ export class BeaconDatabase {
         if (chunks.length !== embeddings.length) {
             throw new Error(`Chunk count mismatch: ${chunks.length} chunks but ${embeddings.length} embeddings`);
         }
-        // Pre-prepare statements once (outside transaction) for reuse
+        if (this.hnswIndex) {
+            this.hnswIndex.removeFile(filePath);
+        }
         const deleteChunks = this.db.prepare("DELETE FROM chunks WHERE file_path = ?");
         const deleteFts = this.db.prepare("DELETE FROM chunks_fts WHERE file_path = ?");
         const insertChunk = this.db.prepare(`INSERT INTO chunks
@@ -176,9 +188,7 @@ export class BeaconDatabase {
         const lastInsertId = this.db.prepare("SELECT last_insert_rowid() as id");
         const insertFts = this.db.prepare(`INSERT INTO chunks_fts(rowid, file_path, chunk_text, identifiers)
        VALUES (?, ?, ?, ?)`);
-        // Use transactions for atomicity
         const transaction = this.db.transaction(() => {
-            // First, delete old chunks for this file
             deleteChunks.run(filePath);
             deleteFts.run(filePath);
             for (let i = 0; i < chunks.length; i++) {
@@ -188,6 +198,15 @@ export class BeaconDatabase {
                 insertChunk.run(filePath, i, chunk.text, chunk.start_line, chunk.end_line, embeddingToBuffer(embedding), fileHash, identifiers);
                 const chunkId = lastInsertId.get().id;
                 insertFts.run(chunkId, filePath, chunk.text, identifiers);
+                if (this.hnswIndex) {
+                    this.hnswIndex.addVector(`${filePath}:${i}`, embedding, {
+                        filePath,
+                        startLine: chunk.start_line,
+                        endLine: chunk.end_line,
+                        chunkText: chunk.text,
+                        chunkId: `${filePath}:${i}`,
+                    });
+                }
             }
         });
         transaction();
@@ -196,6 +215,9 @@ export class BeaconDatabase {
      * Delete chunks for a file
      */
     deleteChunks(filePath) {
+        if (this.hnswIndex) {
+            this.hnswIndex.removeFile(filePath);
+        }
         const transaction = this.db.transaction(() => {
             this.db.prepare("DELETE FROM chunks WHERE file_path = ?").run(filePath);
             this.db.prepare("DELETE FROM chunks_fts WHERE file_path = ?").run(filePath);
@@ -246,10 +268,21 @@ export class BeaconDatabase {
     }
     /**
      * Vector similarity search
-     * Performs cosine similarity in-process since sqlite-vec is not available in Bun runtime.
-     * Uses Float32Array directly (avoids Array.from conversion) for maximum throughput.
+     * Uses HNSW index for O(log n) search when available, falls back to brute-force.
      */
     vectorSearch(queryEmbedding, limit, pathPrefix) {
+        if (this.hnswIndex) {
+            if (pathPrefix) {
+                return this.hnswIndex.searchWithPathFilter(queryEmbedding, limit, pathPrefix);
+            }
+            return this.hnswIndex.search(queryEmbedding, limit);
+        }
+        return this.vectorSearchBruteForce(queryEmbedding, limit, pathPrefix);
+    }
+    /**
+     * Brute-force vector similarity search (fallback when HNSW unavailable)
+     */
+    vectorSearchBruteForce(queryEmbedding, limit, pathPrefix) {
         // Fetch all stored embeddings (with optional path filter)
         let sql = `
       SELECT file_path, start_line, end_line, chunk_text, embedding
@@ -423,13 +456,13 @@ export class BeaconDatabase {
      */
     combineResults(vectorResults, bm25Results, query, topK, threshold, config) {
         const combined = new Map();
-        // Add vector results with ranks
+        // Add vector results with ranks and raw similarity
         vectorResults.forEach((result, index) => {
             const key = `${result.filePath}:${result.startLine}`;
             combined.set(key, {
                 ...result,
                 ranks: { vector: index + 1 },
-                score: 0,
+                rrfScore: 0,
             });
         });
         // Add BM25 results with ranks
@@ -443,7 +476,7 @@ export class BeaconDatabase {
                 combined.set(key, {
                     ...result,
                     ranks: { bm25: index + 1 },
-                    score: 0,
+                    rrfScore: 0,
                 });
             }
         });
@@ -466,23 +499,24 @@ export class BeaconDatabase {
             const fileTypeMultiplier = getFileTypeMultiplier(result.filePath);
             // Combine with weights
             const weights = config.search.hybrid;
-            result.score =
+            result.rrfScore =
                 rffScore *
                     identifierBoost *
                     fileTypeMultiplier *
                     (weights.weight_rrf || 0.3);
-            // Surface the hybrid score as similarity so callers display the correct value
-            result.similarity = result.score;
-            // Apply threshold
-            if (result.score < threshold) {
-                combined.delete(`${result.filePath}:${result.startLine}`);
-            }
+            // For hybrid search, normalize RRF score to 0-1 range for display
+            // Max possible RRF score is 2/61 ≈ 0.033, so we normalize by that
+            const maxRffScore = 2 / 61;
+            const normalizedScore = Math.min(1, result.rrfScore / maxRffScore);
+            result.similarity = normalizedScore;
         }
-        // Sort by score and return top K
-        return Array.from(combined.values())
-            .sort((a, b) => b.score - a.score)
+        // Filter by threshold (using normalized score) and sort by RRF score
+        const results = Array.from(combined.values())
+            .filter((r) => r.similarity >= threshold)
+            .sort((a, b) => b.rrfScore - a.rrfScore)
             .slice(0, topK)
-            .map(({ ranks, ...result }) => result);
+            .map(({ ranks, rrfScore, ...result }) => result);
+        return results;
     }
     /**
      * Get all files in index
@@ -602,11 +636,13 @@ export class BeaconDatabase {
         const transaction = this.db.transaction(() => {
             this.db.exec("DELETE FROM chunks");
             this.db.exec("DELETE FROM chunks_fts");
-            // Note: chunks_vec table removed - no longer using sqlite-vec
             this.clearSyncProgress();
         });
         transaction();
         this.searchCache.clear();
+        if (this.hnswIndex) {
+            this.hnswIndex.clear();
+        }
     }
     /**
      * Record performance metric
@@ -647,13 +683,16 @@ export class BeaconDatabase {
      * Close database connection
      */
     close() {
+        if (this.hnswIndex) {
+            this.hnswIndex.close();
+        }
         this.db.close();
     }
 }
 /**
  * Open or create database
  */
-export function openDatabase(dbPath, dimensions) {
-    return new BeaconDatabase(dbPath, dimensions);
+export function openDatabase(dbPath, dimensions, useHNSW = true) {
+    return new BeaconDatabase(dbPath, dimensions, useHNSW);
 }
 //# sourceMappingURL=db.js.map

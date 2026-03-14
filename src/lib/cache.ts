@@ -1,8 +1,3 @@
-/**
- * LRU Cache with performance tracking
- * Provides in-memory caching for search results and embeddings
- */
-
 interface CacheStats {
   hits: number;
   misses: number;
@@ -16,9 +11,6 @@ interface CacheEntry<T> {
   accessCount: number;
 }
 
-/**
- * Generic LRU (Least Recently Used) cache implementation
- */
 export class LRUCache<T> {
   private cache: Map<string, CacheEntry<T>>;
   private maxSize: number;
@@ -37,11 +29,6 @@ export class LRUCache<T> {
     this.createdAt = Date.now();
   }
 
-  /**
-   * Get value from cache
-   * @param key - Cache key
-   * @returns Cached value or null if not found
-   */
   get(key: string): T | null {
     const entry = this.cache.get(key);
     if (!entry) {
@@ -49,39 +36,29 @@ export class LRUCache<T> {
       return null;
     }
 
-    // Update access metadata
     entry.timestamp = Date.now();
     entry.accessCount++;
     this.stats.hits++;
 
-    // Move to end (most recently used)
     this.cache.delete(key);
     this.cache.set(key, entry);
 
     return entry.value;
   }
 
-  /**
-   * Set value in cache
-   * @param key - Cache key
-   * @param value - Value to cache
-   */
   set(key: string, value: T): void {
-    // Remove if exists (will be re-added)
     if (this.cache.has(key)) {
       this.cache.delete(key);
     } else {
       this.stats.size++;
     }
 
-    // Add new entry
     this.cache.set(key, {
       value,
       timestamp: Date.now(),
       accessCount: 0,
     });
 
-    // Evict least recently used if cache is full
     if (this.cache.size > this.maxSize) {
       const firstKey = this.cache.keys().next().value as string | undefined;
       if (firstKey) {
@@ -92,24 +69,23 @@ export class LRUCache<T> {
     }
   }
 
-  /**
-   * Check if key exists in cache
-   */
   has(key: string): boolean {
     return this.cache.has(key);
   }
 
-  /**
-   * Clear all entries from cache
-   */
+  delete(key: string): boolean {
+    const deleted = this.cache.delete(key);
+    if (deleted) {
+      this.stats.size--;
+    }
+    return deleted;
+  }
+
   clear(): void {
     this.cache.clear();
     this.stats.size = 0;
   }
 
-  /**
-   * Get cache statistics
-   */
   getStats(): CacheStats & { hitRate: number; uptime: number } {
     const total = this.stats.hits + this.stats.misses;
     const hitRate = total > 0 ? this.stats.hits / total : 0;
@@ -122,9 +98,6 @@ export class LRUCache<T> {
     };
   }
 
-  /**
-   * Get cache size
-   */
   size(): number {
     return this.cache.size;
   }
@@ -133,81 +106,79 @@ export class LRUCache<T> {
 interface SearchCacheEntry {
   results: unknown[];
   timestamp: number;
+  optionsHash: number;
 }
 
-/**
- * Search result cache with time-based expiration
- */
+function hashString(str: string): number {
+  let hash = 5381;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) + hash) ^ str.charCodeAt(i);
+  }
+  return hash >>> 0;
+}
+
+function hashOptions(options?: Record<string, unknown>): number {
+  if (!options || Object.keys(options).length === 0) return 0;
+  
+  let hash = 0;
+  const keys = Object.keys(options).sort();
+  for (const key of keys) {
+    const val = options[key];
+    hash = ((hash << 5) + hash) ^ hashString(key);
+    hash = ((hash << 5) + hash) ^ hashString(String(val));
+  }
+  return hash >>> 0;
+}
+
 export class SearchCache {
   private cache: LRUCache<SearchCacheEntry>;
-  private ttl: number; // Time to live in milliseconds
+  private ttl: number;
 
   constructor(maxSize: number = 500, ttlMs: number = 300000) {
-    // 5 min default TTL
     this.cache = new LRUCache(maxSize);
     this.ttl = ttlMs;
   }
 
-  /**
-   * Generate cache key from search parameters
-   */
-  private generateKey(
-    query: string,
-    options?: Record<string, unknown>
-  ): string {
-    const optionsStr = options ? JSON.stringify(options) : "{}";
-    return `${query}:${optionsStr}`;
+  private generateKey(query: string, optionsHash: number): string {
+    return `${query}#${optionsHash}`;
   }
 
-  /**
-   * Get cached search results
-   */
   get(query: string, options?: Record<string, unknown>): unknown[] | null {
-    const key = this.generateKey(query, options);
+    const optionsHash = hashOptions(options);
+    const key = this.generateKey(query, optionsHash);
     const entry = this.cache.get(key);
 
     if (!entry) {
       return null;
     }
 
-    // Check if expired
     if (Date.now() - entry.timestamp > this.ttl) {
-      this.cache.set(key, entry); // Will evict if needed
+      this.cache.delete(key);
       return null;
     }
 
     return entry.results;
   }
 
-  /**
-   * Set cached search results
-   */
   set(query: string, results: unknown[], options?: Record<string, unknown>): void {
-    const key = this.generateKey(query, options);
+    const optionsHash = hashOptions(options);
+    const key = this.generateKey(query, optionsHash);
     this.cache.set(key, {
       results,
       timestamp: Date.now(),
+      optionsHash,
     });
   }
 
-  /**
-   * Clear cache
-   */
   clear(): void {
     this.cache.clear();
   }
 
-  /**
-   * Get cache statistics
-   */
   getStats(): ReturnType<typeof this.cache.getStats> {
     return this.cache.getStats();
   }
 }
 
-/**
- * Performance timer for measuring operation duration
- */
 export class PerformanceTimer {
   private startTime: number;
   private label: string;
@@ -219,9 +190,6 @@ export class PerformanceTimer {
     this.measurements = new Map();
   }
 
-  /**
-   * Mark a checkpoint
-   */
   mark(name: string): number {
     const now = performance.now();
     const duration = now - this.startTime;
@@ -234,16 +202,10 @@ export class PerformanceTimer {
     return duration;
   }
 
-  /**
-   * Get duration since start
-   */
   elapsed(): number {
     return performance.now() - this.startTime;
   }
 
-  /**
-   * Get all measurements
-   */
   getMeasurements(): Record<string, { count: number; min: number; max: number; avg: number }> {
     const result: Record<string, { count: number; min: number; max: number; avg: number }> = {};
 
@@ -259,9 +221,6 @@ export class PerformanceTimer {
     return result;
   }
 
-  /**
-   * Get summary
-   */
   summary(): string {
     const measurements = this.getMeasurements();
     const total = this.elapsed();

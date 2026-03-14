@@ -19,7 +19,9 @@ export declare class BeaconDatabase {
     private dimensions;
     private searchCache;
     private performanceMetrics;
-    constructor(dbPath: string, dimensions: number);
+    private hnswIndex;
+    private useHNSW;
+    constructor(dbPath: string, dimensions: number, useHNSW?: boolean);
     /**
      * Initialize database schema and load extensions
      */
@@ -53,10 +55,13 @@ export declare class BeaconDatabase {
     search(queryEmbedding: number[], topK: number, threshold: number, query: string, config: BeaconConfig, pathPrefix?: string, noHybrid?: boolean): SearchResult[];
     /**
      * Vector similarity search
-     * Performs cosine similarity in-process since sqlite-vec is not available in Bun runtime.
-     * Uses Float32Array directly (avoids Array.from conversion) for maximum throughput.
+     * Uses HNSW index for O(log n) search when available, falls back to brute-force.
      */
     private vectorSearch;
+    /**
+     * Brute-force vector similarity search (fallback when HNSW unavailable)
+     */
+    private vectorSearchBruteForce;
     /**
      * BM25 keyword search using FTS5
      */
@@ -138,5 +143,5 @@ export declare class BeaconDatabase {
 /**
  * Open or create database
  */
-export declare function openDatabase(dbPath: string, dimensions: number): BeaconDatabase;
+export declare function openDatabase(dbPath: string, dimensions: number, useHNSW?: boolean): BeaconDatabase;
 //# sourceMappingURL=db.d.ts.map

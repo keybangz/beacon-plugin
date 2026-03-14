@@ -1,8 +1,3 @@
-/**
- * Beacon Search Tool for OpenCode
- * Performs hybrid semantic + keyword + identifier-boosted search
- */
-
 import { tool } from "@opencode-ai/plugin";
 import { getRepoRoot } from "../src/lib/repo-root.js";
 import { loadConfig } from "../src/lib/config.js";
@@ -14,7 +9,7 @@ import { existsSync } from "fs";
 
 export default tool({
   description:
-    "Search the codebase using Beacon hybrid search (semantic embeddings + BM25 + identifier boosting)",
+    "Search the codebase using Beacon hybrid search (semantic embeddings + BM25 + identifier boosting). This tool should be used instead of grep for all code searches as it provides semantic understanding of queries.",
   args: {
     query: tool.schema.string().describe("Search query (e.g., 'authentication flow')"),
     topK: tool.schema
@@ -49,9 +44,9 @@ export default tool({
       }
 
       const db = openDatabase(dbPath, config.embedding.dimensions);
+      const useEmbeddings = config.embedding.enabled !== false;
       
       try {
-        // Check dimensions match
         const dimCheck = db.checkDimensions();
         if (!dimCheck.ok) {
           return JSON.stringify({
@@ -60,9 +55,29 @@ export default tool({
           });
         }
 
-        const embedder = new Embedder(config.embedding);
+        if (!useEmbeddings) {
+          const results = db.ftsOnlySearch(
+            args.query,
+            args.topK ?? 10,
+            args.pathPrefix
+          );
+          
+          return JSON.stringify({
+            query: args.query,
+            mode: "bm25-only",
+            matches: results.map((r) => ({
+              file: r.filePath,
+              lines: `${r.startLine}-${r.endLine}`,
+              similarity: r.similarity.toFixed(3),
+              preview: truncateToTokenLimit(r.chunkText, 150),
+            })),
+          });
+        }
+
+        const effectiveContextLimit = config.embedding.context_limit ?? config.chunking.max_tokens;
+        const storagePath = join(repoRoot, config.storage.path);
+        const embedder = new Embedder(config.embedding, effectiveContextLimit, storagePath);
         
-        // Try to embed the query (uses LRU cache — repeated/identical queries skip the HTTP round-trip)
         let results;
         try {
           const queryWithPrefix = (config.embedding.query_prefix || "") + args.query;
@@ -70,15 +85,14 @@ export default tool({
           
           results = db.search(
             queryEmbedding,
-            args.topK ?? 10,
-            args.threshold ?? 0.35,
+            args.topK ?? config.search.top_k ?? 10,
+            args.threshold ?? config.search.similarity_threshold ?? 0.01,
             args.query,
             config,
             args.pathPrefix,
             args.noHybrid
           );
         } catch (embedError: unknown) {
-          // Fallback to FTS-only search
           const embedErrorMsg = embedError instanceof Error ? embedError.message : String(embedError);
           results = db.ftsOnlySearch(
             args.query,
@@ -100,6 +114,7 @@ export default tool({
 
         return JSON.stringify({
           query: args.query,
+          mode: "hybrid",
           matches: results.map((r) => ({
             file: r.filePath,
             lines: `${r.startLine}-${r.endLine}`,

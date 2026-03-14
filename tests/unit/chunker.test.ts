@@ -76,7 +76,7 @@ describe("chunkCode", () => {
     const code = "function add(a, b) {\n  return a + b;\n}\n\nfunction sub(a, b) {\n  return a - b;\n}";
     const chunks = chunkCode(code);
     for (const chunk of chunks) {
-      expect(chunk.text).not.toContain(undefined);
+      expect(chunk.text).not.toContain("undefined");
       expect(chunk.text.trim().length).toBeGreaterThan(0);
     }
   });

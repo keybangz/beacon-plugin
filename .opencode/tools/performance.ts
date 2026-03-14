@@ -32,8 +32,9 @@ export default tool({
     const config = loadConfig(repoRoot);
 
     const dbPath = join(repoRoot, (config as any).storage?.path || "", "embeddings.db");
+    const storagePath = join(repoRoot, (config as any).storage?.path || "");
     const db = openDatabase(dbPath, (config as any).embedding?.dimensions || 1024);
-    const embedder = new Embedder(config.embedding);
+    const embedder = new Embedder(config.embedding, undefined, storagePath);
 
     let output = "";
 

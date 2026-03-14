@@ -2,7 +2,7 @@
   "name": "beacon-opencode",
   "version": "2.0.0",
   "type": "module",
-  "description": "Beacon — semantic code search for OpenCode",
+  "description": "Beacon — semantic code search for OpenCode (replaces grep with hybrid search)",
   "author": {
     "name": "Sagar MK"
   },
@@ -13,39 +13,61 @@
   },
   "keywords": [
     "opencode",
+    "opencode-plugin",
     "semantic-search",
     "code-search",
     "embeddings",
     "vector-search",
     "bm25",
-    "hybrid-search"
+    "hybrid-search",
+    "grep-replacement"
   ],
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
     "test": "vitest",
-    "type-check": "tsc --noEmit"
+    "type-check": "tsc --noEmit",
+    "prepublishOnly": "npm run build && npm test",
+    "postinstall": "node scripts/download-model.js || echo 'Run npx beacon-opencode download-model to install ONNX model'"
   },
   "dependencies": {
-    "better-sqlite3": "^11.10.0",
+    "chokidar": "^5.0.0",
+    "hnswlib-node": "^3.0.0",
+    "onnxruntime-node": "^1.24.3",
     "picomatch": "^4.0.0",
     "zod": "^3.22.0"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.8",
     "@types/node": "^20.10.0",
     "@types/picomatch": "^4.0.2",
     "typescript": "^5.3.0",
     "vitest": "^3.0.0"
   },
+  "peerDependencies": {
+    "@opencode-ai/plugin": ">=1.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@opencode-ai/plugin": {
+      "optional": false
+    }
+  },
   "engines": {
     "node": ">=18.0.0"
   },
   "files": [
-    "src/",
     ".opencode/",
     "config/",
+    "scripts/",
     "README.md",
-    "LICENSE"
-  ]
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "bin": {
+    "beacon-opencode": "./scripts/download-model.js"
+  },
+  "main": ".opencode/plugins/beacon.ts",
+  "exports": {
+    ".": "./.opencode/plugins/beacon.ts",
+    "./config": "./config/beacon.default.json"
+  }
 }
