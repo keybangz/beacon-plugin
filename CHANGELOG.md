@@ -2,6 +2,50 @@
 
 All notable changes to Beacon will be documented in this file.
 
+## [2.1.0] - 2025-03-14
+
+### Added
+- **Query Expansion** - Semantic query expansion with code synonyms
+  - Maps "auth" → "authentication", "login", "signin", "credential"
+  - CamelCase splitting for better identifier matching
+  - Extracts code terms (functions, classes, variables)
+
+- **Semantic Chunking** - AST-aware code chunking
+  - Detects functions, classes, interfaces at semantic boundaries
+  - Falls back to token-based chunking for unstructured code
+  - Configurable via `chunking.strategy: "hybrid"`
+
+- **BERT WordPiece Tokenizer** - Proper tokenization for BERT models
+  - Loads vocabulary from vocab.txt
+  - Accent stripping and punctuation splitting
+  - Used by ONNX embedder for better tokenization
+
+- **Code-Specific Models** - Support for CodeBERT and UniXcoder
+  - BPE-based tokenizer for code models
+  - Different pooling strategies per model type
+  - Downloadable models: codebert-base, unixcoder-base
+
+- **Reranking** - Improved result ranking
+  - Cross-encoder reranking for top-K results
+  - Heuristic reranking (term overlap, identifier matching)
+  - Configurable reranking in search config
+
+- **Persistent Cache** - Search results cached in SQLite
+  - Survives across OpenCode invocations
+  - Tracks hits/misses/statistics
+  - 5-minute TTL
+
+- **Performance Metrics** - Track search performance
+  - Metrics stored in SQLite (metrics table)
+  - Tracks search_time, cached searches
+  - Viewable via `performance metrics`
+
+### Changed
+- Default threshold changed from 0.35 to 0.01
+- Default max_tokens changed from 256 to 512
+- Default embedding model: all-MiniLM-L6-v2 (384 dims)
+- Default api_base: "local" (ONNX)
+
 ## [2.0.0] - 2025-03-14
 
 ### Added

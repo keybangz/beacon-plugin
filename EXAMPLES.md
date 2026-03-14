@@ -30,7 +30,7 @@ Every file that mentions the word "auth" — configs, tests, comments, docs. You
 ### With Beacon
 
 ```
-> /search-code where is the authentication flow?
+> search "where is the authentication flow?"
 
 1. src/middleware/auth.ts        — JWT verification + session refresh logic
 2. src/routes/auth.ts            — login, logout, register endpoints
@@ -69,7 +69,7 @@ The word "error" appears in every file. You get a wall of `catch (error) { next(
 ### With Beacon
 
 ```
-> /search-code how do API errors get handled?
+> search "how do API errors get handled?"
 
 1. src/middleware/errorHandler.ts  — central Express error middleware, maps exceptions to HTTP status codes
 2. src/errors/AppError.ts         — custom error base class with status, code, and isOperational flag
@@ -104,7 +104,7 @@ Five matches, unranked. The definition is on line 3. You have to visually scan e
 ### With Beacon
 
 ```
-> /search-code validateSessionToken
+> search "validateSessionToken"
 
 1. src/services/tokenService.ts:47  — function definition: validates JWT, checks expiry + signature
 2. src/middleware/auth.ts:14        — primary call site: runs on every authenticated request
@@ -137,10 +137,10 @@ If you forget step 2, the new code doesn't exist in the index and search returns
 # You write a new file
 > Edit src/middleware/rateLimiter.ts
 
-# Beacon's PostToolUse hook re-embeds the file automatically (~200ms)
+# Beacon's tool.execute.after hook re-embeds the file automatically (~200ms)
 
 # Immediately searchable
-> /search-code rate limiting middleware
+> search "rate limiting middleware"
 
 1. src/middleware/rateLimiter.ts  — sliding window rate limiter, per-IP with Redis backing
 ```
