@@ -41,18 +41,6 @@ async function downloadFile(url: string, destPath: string): Promise<void> {
   console.log(`✓ Downloaded ${Math.round(buffer.byteLength / 1024 / 1024 * 100) / 100} MB`);
 }
 
-async function buildVocabFromTxt(vocabTxtPath: string, vocabJsonPath: string): Promise<void> {
-  const { readFileSync } = await import("fs");
-  const vocabTxt = readFileSync(vocabTxtPath, "utf-8");
-  const tokens = vocabTxt.split("\n").filter((line: string) => line.trim());
-  const vocab: Record<string, number> = {};
-  tokens.forEach((token: string, idx: number) => {
-    vocab[token] = idx;
-  });
-  writeFileSync(vocabJsonPath, JSON.stringify(vocab));
-  console.log(`✓ Built vocab.json with ${tokens.length} tokens`);
-}
-
 async function main(): Promise<void> {
   const modelName = process.argv[2] || "all-MiniLM-L6-v2";
   const modelInfo = MODELS[modelName];
@@ -64,9 +52,9 @@ async function main(): Promise<void> {
   }
   
   const modelsDir = join(homedir(), ".cache", "beacon", "models");
-  const modelPath = join(modelsDir, `${modelName}.onnx`);
-  const vocabTxtPath = join(modelsDir, `${modelName}.vocab.txt`);
-  const vocabJsonPath = join(modelsDir, `${modelName}.vocab.json`);
+  const modelDir = join(modelsDir, modelName);
+  const modelPath = join(modelDir, "model.onnx");
+  const vocabPath = join(modelDir, "vocab.txt");
   
   if (existsSync(modelPath)) {
     console.log(`Model already exists at: ${modelPath}`);
@@ -74,14 +62,14 @@ async function main(): Promise<void> {
     return;
   }
   
-  mkdirSync(modelsDir, { recursive: true });
+  mkdirSync(modelDir, { recursive: true });
   
   try {
     await downloadFile(modelInfo.url, modelPath);
     
     if (modelInfo.vocabUrl) {
-      await downloadFile(modelInfo.vocabUrl, vocabTxtPath);
-      await buildVocabFromTxt(vocabTxtPath, vocabJsonPath);
+      await downloadFile(modelInfo.vocabUrl, vocabPath);
+      console.log(`✓ Vocabulary downloaded to: ${vocabPath}`);
     }
     
     console.log(`\n✓ Model installed successfully!`);
