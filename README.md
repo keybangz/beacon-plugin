@@ -24,20 +24,7 @@
 
 ## Quick Start
 
-### Option A: Install from NPM (Recommended)
-
-```bash
-npm install beacon-opencode
-```
-
-Then add to your project's `.opencode/opencode.json`:
-```json
-{
-  "plugin": ["beacon-opencode"]
-}
-```
-
-### Option B: Install from Source
+### Option A: Install from Source
 
 ```bash
 git clone https://github.com/sagarmk/beacon-opencode
