@@ -47,7 +47,7 @@ function cleanupTestDatabase(dbPath: string): void {
 // Setup and teardown
 beforeEach(() => {
   testDbPath = createTestDatabase();
-  db = openDatabase(testDbPath, 384); // 384 dimensions for testing
+  db = openDatabase(testDbPath, 384, false); // Disable HNSW for unit tests
 });
 
 afterEach(() => {

@@ -80,7 +80,15 @@ beforeAll(async () => {
   // Re-write test config so execute() uses the test storage
   writeFileSync(
     testConfigPath,
-    JSON.stringify({ storage: { path: ".opencode/.beacon-test" } })
+    JSON.stringify({ 
+      storage: { path: ".opencode/.beacon-test" },
+      embedding: {
+        api_base: "http://localhost:11434/v1",
+        model: "test-model",
+        dimensions: MOCK_DIMENSIONS,
+        enabled: true
+      }
+    })
   );
 });
 

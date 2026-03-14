@@ -1,65 +1,98 @@
 # Beacon OpenCode Plugin
 
-**Turn OpenCode into Cursor** — Semantic code search that understands your codebase. Find code by meaning, not just string matching.
-
-Beacon is a semantic search plugin for OpenCode, featuring hybrid search (semantic embeddings + BM25 keyword matching + identifier boosting).
+**Semantic grep replacement for OpenCode** — Search code by meaning, not just string matching. Beacon replaces the built-in grep tool with hybrid semantic search (embeddings + BM25 + identifier boosting).
 
 ## Features
 
-- **Hybrid Search** — Combines vector embeddings, BM25 keyword matching, and identifier boosting for best results
-- **Smart Indexing** — Full index on first run, diff-based catch-up on subsequent syncs
-- **Auto-Sync** — Hooks auto-embed changed files and garbage collect deleted ones
+- **Grep Replacement** — Seamlessly replaces OpenCode's grep with semantic search
+- **Hybrid Search** — Combines vector embeddings, BM25 keyword matching, and identifier boosting
+- **HNSW Index** — O(log n) approximate nearest neighbor search for fast vector queries
+- **Local ONNX Embeddings** — Zero-latency embeddings using onnxruntime-node (no HTTP calls)
+- **Query Expansion** — Semantic expansion with code synonyms (e.g., "auth" → "authentication", "login")
+- **Semantic Chunking** — AST-aware chunking at function/class boundaries
+- **BERT Tokenizer** — Proper WordPiece tokenization for BERT-based models
+- **Code-Specific Models** — Support for CodeBERT and UniXcoder models
+- **Reranking** — Cross-encoder and heuristic reranking for improved results
+- **Real-time Sync** — File watcher auto-indexes changes as you code
+- **Auto-Sync Hooks** — Auto-reindex changed files, garbage collect deleted ones
 - **Graceful Degradation** — Falls back to keyword-only search if embedding server is down
-- **Pluggable Embeddings** — Ollama (local/free), OpenAI, Voyage AI, LiteLLM, or any OpenAI-compatible API
+- **Persistent Cache** — Search results cached in SQLite for instant repeat queries
+- **Performance Metrics** — Track search speed and cache hit rates
+- **Pluggable Embeddings** — ONNX (local), Ollama (local/free), OpenAI, Voyage AI, LiteLLM, or any OpenAI-compatible API
 - **Strict TypeScript** — Fully typed with `strict: true` for reliability
-- **Safe Chunking** — 80% safety margin with character-level truncation to prevent context errors
-- **Graceful Termination** — Stop indexing operations with `terminate-indexer` tool
+- **Safe Chunking** — 80% safety margin with character-level truncation
 
 ## Quick Start
 
-### 1. Install Ollama (for local embeddings)
+### Option A: Install from NPM (Recommended)
 
+```bash
+npm install beacon-opencode
+```
+
+Then add to your project's `.opencode/opencode.json`:
+```json
+{
+  "plugin": ["beacon-opencode"]
+}
+```
+
+### Option B: Install from Source
+
+```bash
+git clone https://github.com/sagarmk/beacon-opencode
+cd beacon-opencode
+npm install
+npm run build
+```
+
+Then add to your `.opencode/opencode.json`:
+```json
+{
+  "plugin": ["./path/to/beacon-opencode/.opencode/plugins/beacon.ts"]
+}
+```
+
+### Configure Embeddings
+
+**Option 1: Local ONNX (Zero HTTP latency)**
+```json
+// .opencode/beacon.json
+{
+  "embedding": {
+    "api_base": "local"
+  }
+}
+```
+
+**Option 2: Ollama (Local/Free)**
 ```bash
 brew install ollama
 ollama serve &
 ollama pull all-minilm:22m
 ```
 
-> **Tip**: The default `all-minilm:22m` model has a 256-token context limit. Adjust your `context_limit` in config if using a different model.
-
-### 2. Clone this repository
-
-```bash
-git clone https://github.com/keybangz/beacon-plugin
-cd beacon-plugin
-```
-
-### 3. Build the Plugin
-
-```bash
-npm install
-npm run build
-```
-
-### 4. Add to OpenCode
-
-Copy the `.opencode/` directory from this repo into your project root, or add the plugin path to your project's `.opencode/opencode.json`:
-
+**Option 3: OpenAI/Voyage/etc.**
 ```json
 {
-  "plugin": ["./path/to/beacon-plugin/.opencode/plugins/beacon.ts"]
+  "embedding": {
+    "api_base": "https://api.openai.com/v1",
+    "api_key": "your-key",
+    "model": "text-embedding-3-small"
+  }
 }
 ```
 
-### 5. Search Your Code
+### Search Your Code
 
-```bash
-# Initialize index
-opencode reindex
-
-# Search semantically
-opencode search "authentication flow"
 ```
+# Initialize index
+reindex
+
+# Search semantically (replaces grep)
+search "authentication flow"
+search "database connection logic"
+search "error handling in API"
 
 ## Documentation
 
@@ -78,7 +111,7 @@ Hybrid search combining semantic similarity, BM25 keyword matching, and identifi
 
 **Options:**
 - `topK` — Number of results (default: 10)
-- `threshold` — Minimum score cutoff (default: 0.35)
+- `threshold` — Minimum score cutoff (default: 0.01)
 - `pathPrefix` — Scope results to a directory
 - `noHybrid` — Use pure vector search only
 
@@ -113,6 +146,9 @@ beacon-plugin/
 │   │       ├── chunker.js
 │   │       ├── sync.js
 │   │       ├── embedder.js
+│   │       ├── hnsw.js
+│   │       ├── cache.js
+│   │       ├── reranker.js
 │   │       └── ...
 │   ├── tools/                # OpenCode tools (import compiled .js files)
 │   │   ├── search.ts
@@ -132,11 +168,18 @@ beacon-plugin/
 │   ├── tokenizer.ts
 │   ├── chunker.ts
 │   ├── embedder.ts
+│   ├── onnx-embedder.ts
+│   ├── bert-tokenizer.ts
+│   ├── code-tokenizer.ts
+│   ├── hnsw.ts
+│   ├── cache.ts
+│   ├── reranker.ts
 │   ├── config.ts
 │   ├── git.ts
 │   ├── ignore.ts
 │   ├── repo-root.ts
-│   └── safety.ts
+│   ├── safety.ts
+│   └── watcher.ts
 ├── config/
 │   └── beacon.default.json   # Default configuration
 ├── package.json
@@ -152,10 +195,10 @@ beacon-plugin/
 ### Technology Stack
 
 - **Database** — SQLite with WAL mode
-- **Vector Search** — sqlite-vec (cosine distance)
+- **Vector Search** — HNSW (hnswlib-node) for O(log n) approximate nearest neighbor
 - **Full-Text Search** — FTS5 with porter stemmer
 - **Ranking** — RRF combining vector + BM25 + identifier matching
-- **Embeddings** — OpenAI-compatible API (Ollama, OpenAI, Voyage AI, etc.)
+- **Embeddings** — ONNX local (default), OpenAI-compatible API (Ollama, OpenAI, Voyage AI, etc.)
 - **File Scanning** — Git-based (git ls-files)
 - **Pattern Matching** — picomatch for glob patterns
 
@@ -166,12 +209,22 @@ beacon-plugin/
 - ✅ File discovery (git integration)
 - ✅ Pattern matching (glob support)
 - ✅ Code chunking (token-based with overlap, 80% safety margin, character-level truncation)
+- ✅ Semantic chunking (AST-aware at function/class boundaries)
 - ✅ Tokenization (BM25, identifier extraction, RRF)
+- ✅ Query expansion (code synonyms, camelCase splitting)
 - ✅ Embedding coordination (with retry logic)
+- ✅ ONNX local embeddings (zero HTTP latency)
+- ✅ BERT WordPiece tokenizer
+- ✅ CodeBERT/UniXcoder support
+- ✅ Reranking (cross-encoder + heuristic)
 - ✅ Safety checks (blacklist validation, terminate-indexer with DB flag)
 - ✅ Database layer (SQLite + FTS5)
+- ✅ HNSW vector index
+- ✅ Persistent search cache
+- ✅ Performance metrics tracking
 - ✅ Tool implementations (search, index, status, reindex, config, blacklist, whitelist, performance, terminate-indexer)
 - ✅ Auto-sync hooks (incremental re-embedding, garbage collection)
+- ✅ File watcher for real-time indexing
 - ✅ Progress reporting with DB state tracking
 
 ## Troubleshooting

@@ -11,6 +11,7 @@
 
 import { Database } from "bun:sqlite";
 import { statSync } from "fs";
+import { dirname, join } from "path";
 import type {
   Chunk,
   SearchResult,
@@ -25,8 +26,10 @@ import {
   getIdentifierBoost,
 } from "./tokenizer.js";
 import { SearchCache, PerformanceTimer } from "./cache.js";
+import { HNSWVectorIndex, type HNSWIndexConfig } from "./hnsw.js";
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 4;
+const CACHE_TTL_MS = 300000; // 5 minutes
 
 /**
  * Convert embedding array to buffer for storage
@@ -44,16 +47,21 @@ export class BeaconDatabase {
   private db: Database;
   private dbPath: string;
   private dimensions: number;
-  private searchCache: SearchCache;
-  private performanceMetrics: Map<string, number[]>;
+  private hnswIndex: HNSWVectorIndex | null = null;
+  private useHNSW: boolean = true;
 
-  constructor(dbPath: string, dimensions: number) {
+  constructor(dbPath: string, dimensions: number, useHNSW: boolean = true) {
     this.db = new Database(dbPath, { create: true });
     this.dbPath = dbPath;
     this.dimensions = dimensions;
-    this.searchCache = new SearchCache(1000, 300000); // 1000 items, 5 min TTL
-    this.performanceMetrics = new Map();
+    this.useHNSW = useHNSW;
     this.init();
+    
+    if (this.useHNSW) {
+      const storagePath = dirname(dbPath);
+      this.hnswIndex = new HNSWVectorIndex(dimensions, storagePath);
+      this.hnswIndex.initialize();
+    }
   }
 
   /**
@@ -105,11 +113,47 @@ export class BeaconDatabase {
       )
     `);
 
+    // Create metrics table for persistent performance tracking
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS metrics (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        value REAL NOT NULL,
+        recorded_at TEXT DEFAULT (datetime('now'))
+      )
+    `);
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_metrics_name ON metrics(name)
+    `);
+
+    // Create search cache table for persistent caching
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS search_cache (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        timestamp INTEGER NOT NULL,
+        options_hash INTEGER NOT NULL DEFAULT 0
+      )
+    `);
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_cache_timestamp ON search_cache(timestamp)
+    `);
+
+    // Create cache stats table
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS cache_stats (
+        key TEXT PRIMARY KEY,
+        value INTEGER NOT NULL
+      )
+    `);
+
     // Note: Vector table (chunks_vec) removed - using BM25 search via FTS5 instead
     // sqlite-vec is not available in Bun runtime
 
-    // Migrate to schema v2
+    // Migrate to latest schema
     this.migrateToV2();
+    this.migrateToV3();
+    this.migrateToV4();
   }
 
   /**
@@ -177,6 +221,72 @@ export class BeaconDatabase {
   }
 
   /**
+   * Migrate to schema version 3 (add metrics table)
+   */
+  private migrateToV3(): void {
+    const currentVersion = parseInt(
+      this.getSyncState("schema_version") ?? "1",
+      10
+    );
+
+    if (currentVersion >= 3) {
+      return;
+    }
+
+    // Create metrics table
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS metrics (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        value REAL NOT NULL,
+        recorded_at TEXT DEFAULT (datetime('now'))
+      )
+    `);
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_metrics_name ON metrics(name)
+    `);
+
+    this.setSyncState("schema_version", "3");
+  }
+
+  /**
+   * Migrate to schema version 4 (add persistent search cache)
+   */
+  private migrateToV4(): void {
+    const currentVersion = parseInt(
+      this.getSyncState("schema_version") ?? "1",
+      10
+    );
+
+    if (currentVersion >= 4) {
+      return;
+    }
+
+    // Create search cache table
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS search_cache (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        timestamp INTEGER NOT NULL,
+        options_hash INTEGER NOT NULL DEFAULT 0
+      )
+    `);
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_cache_timestamp ON search_cache(timestamp)
+    `);
+
+    // Create cache stats table
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS cache_stats (
+        key TEXT PRIMARY KEY,
+        value INTEGER NOT NULL
+      )
+    `);
+
+    this.setSyncState("schema_version", "4");
+  }
+
+  /**
    * Check if database dimensions match config
    * Note: With BM25-only search, dimensions are not stored in database
    * This method returns ok:true since embeddings are stored in chunks table
@@ -231,7 +341,10 @@ export class BeaconDatabase {
       );
     }
 
-    // Pre-prepare statements once (outside transaction) for reuse
+    if (this.hnswIndex) {
+      this.hnswIndex.removeFile(filePath);
+    }
+
     const deleteChunks = this.db.prepare("DELETE FROM chunks WHERE file_path = ?");
     const deleteFts = this.db.prepare("DELETE FROM chunks_fts WHERE file_path = ?");
     const insertChunk = this.db.prepare(
@@ -245,9 +358,7 @@ export class BeaconDatabase {
        VALUES (?, ?, ?, ?)`
     );
 
-    // Use transactions for atomicity
     const transaction = this.db.transaction(() => {
-      // First, delete old chunks for this file
       deleteChunks.run(filePath);
       deleteFts.run(filePath);
 
@@ -271,6 +382,20 @@ export class BeaconDatabase {
 
         const chunkId = (lastInsertId.get() as { id: number }).id;
         insertFts.run(chunkId, filePath, chunk.text, identifiers);
+
+        if (this.hnswIndex) {
+          this.hnswIndex.addVector(
+            `${filePath}:${i}`,
+            embedding,
+            {
+              filePath,
+              startLine: chunk.start_line,
+              endLine: chunk.end_line,
+              chunkText: chunk.text,
+              chunkId: `${filePath}:${i}`,
+            }
+          );
+        }
       }
     });
 
@@ -281,6 +406,9 @@ export class BeaconDatabase {
    * Delete chunks for a file
    */
   deleteChunks(filePath: string): void {
+    if (this.hnswIndex) {
+      this.hnswIndex.removeFile(filePath);
+    }
     const transaction = this.db.transaction(() => {
       this.db.prepare("DELETE FROM chunks WHERE file_path = ?").run(filePath);
       this.db.prepare("DELETE FROM chunks_fts WHERE file_path = ?").run(filePath);
@@ -303,11 +431,15 @@ export class BeaconDatabase {
     noHybrid?: boolean
   ): SearchResult[] {
     // Check cache first (include noHybrid in options to avoid cross-mode cache hits)
-    const cacheOptions = { topK, pathPrefix, noHybrid: noHybrid ?? false };
-    const cachedResults = this.searchCache.get(query, cacheOptions);
+    const optionsHash = this.hashOptions({ topK, pathPrefix, noHybrid: noHybrid ?? false });
+    const cachedResults = this.getCachedResults(query, optionsHash);
     if (cachedResults) {
-      return cachedResults as SearchResult[];
+      this.incrementCacheStat("hits");
+      this.recordMetric("search_time_cached", 0);
+      return cachedResults;
     }
+
+    this.incrementCacheStat("misses");
 
     const timer = new PerformanceTimer("search");
 
@@ -352,17 +484,121 @@ export class BeaconDatabase {
     this.recordMetric("search_time", timer.elapsed());
 
     // Cache results
-    this.searchCache.set(query, results, cacheOptions);
+    this.cacheResults(query, results, optionsHash);
 
     return results;
   }
 
   /**
+   * Hash options object for cache key
+   */
+  private hashOptions(options: Record<string, unknown>): number {
+    let hash = 0;
+    const keys = Object.keys(options).sort();
+    for (const key of keys) {
+      const val = options[key];
+      hash = ((hash << 5) + hash) ^ key.charCodeAt(0);
+      hash = ((hash << 5) + hash) ^ String(val).charCodeAt(0);
+    }
+    return hash >>> 0;
+  }
+
+  /**
+   * Get cached search results
+   */
+  private getCachedResults(query: string, optionsHash: number): SearchResult[] | null {
+    const key = `${query}#${optionsHash}`;
+    
+    const row = this.db
+      .prepare("SELECT value, timestamp FROM search_cache WHERE key = ?")
+      .get(key) as { value: string; timestamp: number } | undefined;
+
+    if (!row) {
+      return null;
+    }
+
+    if (Date.now() - row.timestamp > CACHE_TTL_MS) {
+      this.db.prepare("DELETE FROM search_cache WHERE key = ?").run(key);
+      return null;
+    }
+
+    return JSON.parse(row.value) as SearchResult[];
+  }
+
+  /**
+   * Cache search results
+   */
+  private cacheResults(query: string, results: SearchResult[], optionsHash: number): void {
+    const key = `${query}#${optionsHash}`;
+    const value = JSON.stringify(results);
+    const timestamp = Date.now();
+
+    // Clean up old entries if cache is large
+    const count = (this.db.prepare("SELECT COUNT(*) as c FROM search_cache").get() as { c: number }).c;
+    if (count > 1000) {
+      this.db.prepare("DELETE FROM search_cache WHERE timestamp < ?").run(Date.now() - CACHE_TTL_MS);
+    }
+
+    this.db
+      .prepare("INSERT OR REPLACE INTO search_cache (key, value, timestamp, options_hash) VALUES (?, ?, ?, ?)")
+      .run(key, value, timestamp, optionsHash);
+  }
+
+  /**
+   * Clear search cache
+   */
+  clearCache(): void {
+    this.db.exec("DELETE FROM search_cache");
+    this.db.exec("DELETE FROM cache_stats");
+  }
+
+  /**
+   * Increment cache stat counter
+   */
+  private incrementCacheStat(stat: string): void {
+    this.db
+      .prepare(`
+        INSERT INTO cache_stats (key, value) VALUES (?, 1)
+        ON CONFLICT(key) DO UPDATE SET value = value + 1
+      `)
+      .run(stat);
+  }
+
+  /**
+   * Get cache statistics
+   */
+  getCacheStats(): { hits: number; misses: number; size: number; hitRate: number; uptime: number } {
+    const hits = (this.db.prepare("SELECT value FROM cache_stats WHERE key = 'hits'").get() as { value: number } | undefined)?.value ?? 0;
+    const misses = (this.db.prepare("SELECT value FROM cache_stats WHERE key = 'misses'").get() as { value: number } | undefined)?.value ?? 0;
+    const size = (this.db.prepare("SELECT COUNT(*) as c FROM search_cache").get() as { c: number }).c;
+    const total = hits + misses;
+    const hitRate = total > 0 ? hits / total : 0;
+
+    return { hits, misses, size, hitRate, uptime: 0 };
+  }
+
+  /**
    * Vector similarity search
-   * Performs cosine similarity in-process since sqlite-vec is not available in Bun runtime.
-   * Uses Float32Array directly (avoids Array.from conversion) for maximum throughput.
+   * Uses HNSW index for O(log n) search when available, falls back to brute-force.
    */
   private vectorSearch(
+    queryEmbedding: number[],
+    limit: number,
+    pathPrefix?: string
+  ): SearchResult[] {
+    if (this.hnswIndex) {
+      if (pathPrefix) {
+        return this.hnswIndex.searchWithPathFilter(queryEmbedding, limit, pathPrefix);
+      }
+      return this.hnswIndex.search(queryEmbedding, limit);
+    }
+    return this.vectorSearchBruteForce(queryEmbedding, limit, pathPrefix);
+  }
+
+  /**
+   * Brute-force vector similarity search (fallback when HNSW unavailable)
+   */
+  private vectorSearchBruteForce(
     queryEmbedding: number[],
     limit: number,
     pathPrefix?: string
@@ -593,16 +829,16 @@ export class BeaconDatabase {
   ): SearchResult[] {
     const combined = new Map<
       string,
-      SearchResult & { ranks: { vector?: number; bm25?: number }; score: number }
+      SearchResult & { ranks: { vector?: number; bm25?: number }; rrfScore: number }
     >();
 
-    // Add vector results with ranks
+    // Add vector results with ranks and raw similarity
     vectorResults.forEach((result, index) => {
       const key = `${result.filePath}:${result.startLine}`;
       combined.set(key, {
         ...result,
         ranks: { vector: index + 1 },
-        score: 0,
+        rrfScore: 0,
       });
     });
 
@@ -617,7 +853,7 @@ export class BeaconDatabase {
         combined.set(key, {
           ...result,
           ranks: { bm25: index + 1 },
-          score: 0,
+          rrfScore: 0,
         });
       }
     });
@@ -651,26 +887,27 @@ export class BeaconDatabase {
 
       // Combine with weights
       const weights = config.search.hybrid;
-      result.score =
+      result.rrfScore =
         rffScore *
         identifierBoost *
         fileTypeMultiplier *
         (weights.weight_rrf || 0.3);
 
-      // Surface the hybrid score as similarity so callers display the correct value
-      result.similarity = result.score;
-
-      // Apply threshold
-      if (result.score < threshold) {
-        combined.delete(`${result.filePath}:${result.startLine}`);
-      }
+      // For hybrid search, normalize RRF score to 0-1 range for display
+      // Max possible RRF score is 2/61 ≈ 0.033, so we normalize by that
+      const maxRffScore = 2 / 61;
+      const normalizedScore = Math.min(1, result.rrfScore / maxRffScore);
+      result.similarity = normalizedScore;
     }
 
-    // Sort by score and return top K
-    return Array.from(combined.values())
-      .sort((a, b) => b.score - a.score)
+    // Filter by threshold (using normalized score) and sort by RRF score
+    const results = Array.from(combined.values())
+      .filter((r) => r.similarity >= threshold)
+      .sort((a, b) => b.rrfScore - a.rrfScore)
       .slice(0, topK)
-      .map(({ ranks, ...result }) => result);
+      .map(({ ranks, rrfScore, ...result }) => result);
+
+    return results;
   }
 
   /**
@@ -809,60 +1046,65 @@ export class BeaconDatabase {
     const transaction = this.db.transaction(() => {
       this.db.exec("DELETE FROM chunks");
       this.db.exec("DELETE FROM chunks_fts");
-      // Note: chunks_vec table removed - no longer using sqlite-vec
       this.clearSyncProgress();
     });
 
     transaction();
-    this.searchCache.clear();
+    this.clearCache();
+    
+    if (this.hnswIndex) {
+      this.hnswIndex.clear();
+    }
   }
 
   /**
    * Record performance metric
    */
   private recordMetric(name: string, value: number): void {
-    if (!this.performanceMetrics.has(name)) {
-      this.performanceMetrics.set(name, []);
-    }
-    this.performanceMetrics.get(name)!.push(value);
+    this.db
+      .prepare("INSERT INTO metrics (name, value) VALUES (?, ?)")
+      .run(name, value);
   }
 
   /**
    * Get performance metrics summary
    */
   getMetrics(): Record<string, { count: number; min: number; max: number; avg: number }> {
+    const rows = this.db
+      .prepare(`
+        SELECT name, COUNT(*) as count, MIN(value) as min, MAX(value) as max, AVG(value) as avg
+        FROM metrics
+        GROUP BY name
+      `)
+      .all() as Array<{ name: string; count: number; min: number; max: number; avg: number }>;
+
     const result: Record<string, { count: number; min: number; max: number; avg: number }> = {};
-
-    for (const [name, values] of this.performanceMetrics) {
-      const count = values.length;
-      const min = Math.min(...values);
-      const max = Math.max(...values);
-      const avg = values.reduce((a, b) => a + b, 0) / count;
-
-      result[name] = { count, min, max, avg };
+    for (const row of rows) {
+      result[row.name] = {
+        count: row.count,
+        min: row.min,
+        max: row.max,
+        avg: row.avg,
+      };
     }
 
     return result;
   }
 
   /**
-   * Get cache statistics
-   */
-  getCacheStats(): ReturnType<typeof this.searchCache.getStats> {
-    return this.searchCache.getStats();
-  }
-
-  /**
    * Clear performance metrics
    */
   clearMetrics(): void {
-    this.performanceMetrics.clear();
+    this.db.exec("DELETE FROM metrics");
   }
 
   /**
    * Close database connection
    */
   close(): void {
+    if (this.hnswIndex) {
+      this.hnswIndex.close();
+    }
     this.db.close();
   }
 }
@@ -872,7 +1114,8 @@ export class BeaconDatabase {
  */
 export function openDatabase(
   dbPath: string,
-  dimensions: number
+  dimensions: number,
+  useHNSW: boolean = true
 ): BeaconDatabase {
-  return new BeaconDatabase(dbPath, dimensions);
+  return new BeaconDatabase(dbPath, dimensions, useHNSW);
 }

@@ -1,4 +1,16 @@
 {
+  "none": {
+    "description": "No embeddings — BM25-only keyword search (fastest, no AI model required)",
+    "embedding": {
+      "api_base": "",
+      "model": "",
+      "api_key_env": "",
+      "dimensions": 384,
+      "batch_size": 1,
+      "query_prefix": "",
+      "enabled": false
+    }
+  },
   "ollama": {
     "description": "Ollama (local) — all-minilm:22m, 384-dim, ~46MB, 4-6× faster than nomic-embed-text on CPU",
     "embedding": {

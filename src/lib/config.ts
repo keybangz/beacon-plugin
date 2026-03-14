@@ -180,12 +180,19 @@ export function validateConfig(config: unknown): asserts config is BeaconConfig 
   // Validate embedding config
   const embedding = cfg.embedding as Record<string, unknown>;
   if (
-    !embedding.api_base ||
-    !embedding.model ||
-    !embedding.dimensions ||
-    !embedding.batch_size
+    embedding.api_base === undefined ||
+    embedding.model === undefined ||
+    embedding.dimensions === undefined ||
+    embedding.batch_size === undefined
   ) {
     throw new Error("Invalid embedding configuration");
+  }
+
+  // Validate that if embeddings are enabled, api_base and model must be set
+  if (embedding.enabled !== false) {
+    if (!embedding.api_base || !embedding.model) {
+      throw new Error("api_base and model are required when embeddings are enabled");
+    }
   }
 
   // Validate storage config

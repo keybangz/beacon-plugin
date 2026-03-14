@@ -19,6 +19,8 @@ export interface EmbeddingConfig {
   query_prefix: string;
   /** Model context limit in tokens (for hard-truncation). Defaults to 256. */
   context_limit?: number;
+  /** Enable/disable embedding generation. When false, uses BM25-only search. */
+  enabled?: boolean;
 }
 
 export interface ChunkingConfig {
@@ -67,6 +69,19 @@ export interface SearchConfig {
   similarity_threshold: number;
   /** Hybrid search configuration */
   hybrid: HybridSearchWeights & { enabled: boolean };
+  /** Reranking configuration */
+  reranking?: RerankingConfig;
+}
+
+export interface RerankingConfig {
+  /** Enable reranking */
+  enabled: boolean;
+  /** Path to cross-encoder model */
+  model_path?: string;
+  /** Number of candidates to rerank */
+  top_k: number;
+  /** Use simplified reranking (no model, just heuristic) */
+  heuristic?: boolean;
 }
 
 export interface StorageConfig {

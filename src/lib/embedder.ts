@@ -1,16 +1,9 @@
-/**
- * Embedding API coordination
- * Handles requests to embedding services with retry logic, batching, and query caching
- */
-
 import type { EmbeddingConfig, EmbedderResult, EmbedderEmbedding } from "./types.js";
+import { ONNXEmbedder, type ONNXEmbedderConfig } from "./onnx-embedder.js";
+import { join } from "path";
+import { existsSync, mkdirSync } from "fs";
+import { homedir } from "os";
 
-/**
- * Simple LRU cache for single-text query embeddings.
- * Keyed on `${model}:${text}` so it's safe across model changes.
- * Max 256 entries — enough for repeated queries within a session without
- * consuming significant memory (256 × 384 floats × 4 bytes ≈ 400 KB).
- */
 class QueryEmbeddingCache {
   private cache = new Map<string, number[]>();
   private readonly maxSize: number;
@@ -23,7 +16,6 @@ class QueryEmbeddingCache {
     const key = `${model}:${text}`;
     const value = this.cache.get(key);
     if (!value) return null;
-    // Move to end (most recently used)
     this.cache.delete(key);
     this.cache.set(key, value);
     return value;
@@ -34,7 +26,6 @@ class QueryEmbeddingCache {
     if (this.cache.has(key)) this.cache.delete(key);
     this.cache.set(key, embedding);
     if (this.cache.size > this.maxSize) {
-      // Evict LRU entry (first key in insertion order)
       const firstKey = this.cache.keys().next().value as string;
       this.cache.delete(firstKey);
     }
@@ -45,37 +36,122 @@ class QueryEmbeddingCache {
   }
 }
 
-/**
- * Embedder class handles communication with embedding API
- * Supports OpenAI-compatible endpoints (Ollama, OpenAI, Voyage AI, LiteLLM, etc.)
- */
+function simpleHash(str: string): number {
+  let hash = 5381;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) + hash) ^ str.charCodeAt(i);
+  }
+  return hash >>> 0;
+}
+
+export type EmbedderMode = "api" | "onnx" | "disabled";
+
 export class Embedder {
   private config: EmbeddingConfig;
-  private retryDelays: number[] = [1000, 4000]; // 1s, 4s backoff
+  private retryDelays: number[] = [1000, 4000, 8000];
   private queryCache = new QueryEmbeddingCache(256);
-  /** Maximum tokens the embedding model accepts. Used for hard-truncation. */
   private contextLimit: number;
+  private enabled: boolean;
+  private mode: EmbedderMode;
+  private pendingRequests: Map<number, Promise<number[]>> = new Map();
+  private onnxEmbedder: ONNXEmbedder | null = null;
+  private storagePath: string | null = null;
 
-  /**
-   * @param config - Embedding API configuration
-   * @param contextLimit - Model context limit in tokens (defaults to config.embedding.context_limit or 256)
-   */
-  constructor(config: EmbeddingConfig, contextLimit?: number) {
+  constructor(config: EmbeddingConfig, contextLimit?: number, storagePath?: string) {
     this.config = config;
     this.contextLimit = contextLimit ?? config.context_limit ?? 256;
+    this.enabled = config.enabled !== false;
+    this.storagePath = storagePath ?? null;
+    
+    if (this.config.api_base === "local" || this.config.api_base === "onnx") {
+      this.mode = "onnx";
+      this.initializeONNX();
+    } else if (!this.enabled) {
+      this.mode = "disabled";
+    } else {
+      this.mode = "api";
+    }
   }
 
-  /**
-   * Health check for embedding endpoint
-   * @returns Result object with ok status
-   */
+  private initializeONNX(): void {
+    const globalModelsDir = join(homedir(), ".cache", "beacon", "models");
+    
+    let modelPath: string;
+    if (this.config.model.startsWith("/")) {
+      modelPath = this.config.model;
+    } else if (this.storagePath) {
+      modelPath = join(this.storagePath, "models", `${this.config.model}.onnx`);
+    } else {
+      modelPath = join(globalModelsDir, `${this.config.model}.onnx`);
+    }
+
+    const vocabPath = join(
+      modelPath.replace(/\.onnx$/, "").replace(/\.vocab\.txt$/, ""),
+      "..",
+      `${this.config.model}.vocab.json`
+    );
+
+    if (existsSync(modelPath)) {
+      const onnxConfig: ONNXEmbedderConfig = {
+        modelPath,
+        dimensions: this.config.dimensions,
+        maxTokens: this.contextLimit,
+        cacheSize: 256,
+      };
+      this.onnxEmbedder = new ONNXEmbedder(onnxConfig);
+      this.onnxEmbedder.initialize().catch(() => {
+        this.mode = "disabled";
+      });
+    } else {
+      const globalModelPath = join(globalModelsDir, `${this.config.model}.onnx`);
+      if (existsSync(globalModelPath)) {
+        const onnxConfig: ONNXEmbedderConfig = {
+          modelPath: globalModelPath,
+          dimensions: this.config.dimensions,
+          maxTokens: this.contextLimit,
+          cacheSize: 256,
+        };
+        this.onnxEmbedder = new ONNXEmbedder(onnxConfig);
+        this.onnxEmbedder.initialize().catch(() => {
+          this.mode = "disabled";
+        });
+      } else {
+        this.mode = "disabled";
+      }
+    }
+  }
+
+  getMode(): EmbedderMode {
+    return this.mode;
+  }
+
+  isEnabled(): boolean {
+    return this.enabled;
+  }
+
   async ping(): Promise<EmbedderResult> {
+    if (!this.enabled) {
+      return { ok: true, error: "Embeddings disabled - using BM25-only mode" };
+    }
+
+    if (this.mode === "onnx") {
+      if (!this.onnxEmbedder) {
+        return { ok: false, error: "ONNX embedder not initialized - model file may be missing" };
+      }
+      if (!this.onnxEmbedder.isInitialized()) {
+        const result = await this.onnxEmbedder.initialize();
+        if (!result.ok) {
+          return result;
+        }
+      }
+      return { ok: true };
+    }
+
     try {
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
       };
 
-      // Add API key if configured
       if (this.config.api_key_env) {
         const apiKey: string | undefined = process.env[this.config.api_key_env];
         if (apiKey) {
@@ -105,91 +181,124 @@ export class Embedder {
     }
   }
 
-  /**
-   * Embed a single query text with LRU caching.
-   * Use this for search queries instead of embedDocuments([text]) to avoid
-   * a redundant HTTP round-trip on repeated or identical queries.
-   * @param text - Query text (query_prefix should already be prepended if needed)
-   * @returns Embedding vector
-   */
   async embedQuery(text: string): Promise<number[]> {
+    if (this.mode === "disabled") {
+      return this.generatePlaceholderEmbedding(text);
+    }
+
+    if (this.mode === "onnx" && this.onnxEmbedder) {
+      if (!this.onnxEmbedder.isInitialized()) {
+        const result = await this.onnxEmbedder.initialize();
+        if (!result.ok) {
+          return this.generatePlaceholderEmbedding(text);
+        }
+      }
+      return this.onnxEmbedder.embed(text);
+    }
+
     const cached = this.queryCache.get(this.config.model, text);
     if (cached) return cached;
 
-    const [embedding] = await this.embedBatchWithRetry([text]);
-    this.queryCache.set(this.config.model, text, embedding);
-    return embedding;
+    const hash = simpleHash(`${this.config.model}:${text}`);
+    const pending = this.pendingRequests.get(hash);
+    if (pending) return pending;
+
+    const request = this.embedSingle(text);
+    this.pendingRequests.set(hash, request);
+
+    try {
+      const embedding = await request;
+      this.queryCache.set(this.config.model, text, embedding);
+      return embedding;
+    } finally {
+      this.pendingRequests.delete(hash);
+    }
   }
 
-  /**
-   * Truncate text to stay within the embedding model's context window.
-   * Uses a conservative 3-char/token estimate with 80% safety margin
-   * to account for tokenization differences between our estimator and
-   * the actual embedding model.
-   * This is a last-resort safety net; the chunker should already produce
-   * correctly-sized chunks, but oversized inputs to Ollama cause hard
-   * "input length exceeds context length" errors that silently drop chunks.
-   * @param text - Input text
-   * @param maxTokens - Maximum allowed tokens (will apply 80% safety margin)
-   * @returns Truncated text
-   */
   private truncateToContextLimit(text: string, maxTokens: number): string {
-    // Apply 80% safety margin to account for tokenization differences
     const safeMaxTokens = Math.floor(maxTokens * 0.8);
-    const maxChars = safeMaxTokens * 3; // 3 chars/token conservative estimate
+    const maxChars = safeMaxTokens * 3;
     if (text.length <= maxChars) return text;
     return text.slice(0, maxChars);
   }
 
-  /**
-   * Embed documents with retry logic and batch_size splitting.
-   * Splits large arrays into chunks of config.batch_size before sending,
-   * preventing Ollama from stalling on files with many chunks.
-   * @param documents - Array of text documents to embed
-   * @returns Array of embedding vectors (same order as input)
-   * @throws Error if embedding fails after retries
-   */
   async embedDocuments(documents: string[]): Promise<number[][]> {
-    console.log(`embedDocuments called with ${documents.length} documents`);
     if (!documents.length) {
       return [];
     }
 
-    // Hard-truncate any document that exceeds the model context window.
-    // The chunker now applies a 90% safety margin, but this provides an
-    // additional safety net for tokenization differences.
-    console.log(`Truncating ${documents.length} documents to context limit of ${this.contextLimit} tokens (with 90% safety margin)`);
+    if (this.mode === "disabled") {
+      return documents.map((d) => this.generatePlaceholderEmbedding(d));
+    }
+
+    if (this.mode === "onnx" && this.onnxEmbedder) {
+      if (!this.onnxEmbedder.isInitialized()) {
+        const result = await this.onnxEmbedder.initialize();
+        if (!result.ok) {
+          return documents.map((d) => this.generatePlaceholderEmbedding(d));
+        }
+      }
+      return this.onnxEmbedder.embedBatch(documents);
+    }
+
     documents = documents.map((d) => this.truncateToContextLimit(d, this.contextLimit));
 
-    const batchSize = this.config.batch_size ?? 50;
+    const batchSize = this.config.batch_size ?? 10;
 
-    // If documents fit in one batch, embed directly
     if (documents.length <= batchSize) {
       return this.embedBatchWithRetry(documents);
     }
 
-    // Split into batches and concatenate results in order
-    const results: number[][] = [];
+    const results: number[][] = new Array(documents.length);
+    const batches: Array<{ start: number; docs: string[] }> = [];
+    
     for (let i = 0; i < documents.length; i += batchSize) {
-      const batch = documents.slice(i, i + batchSize);
-      const batchResults = await this.embedBatchWithRetry(batch);
-      results.push(...batchResults);
+      const end = Math.min(i + batchSize, documents.length);
+      batches.push({ start: i, docs: documents.slice(i, end) });
     }
+
+    const concurrency = 4;
+    for (let i = 0; i < batches.length; i += concurrency) {
+      const batchGroup = batches.slice(i, i + concurrency);
+      const batchResults = await Promise.all(
+        batchGroup.map((batch) => this.embedBatchWithRetry(batch.docs))
+      );
+      for (let j = 0; j < batchResults.length; j++) {
+        const batchStart = batchGroup[j].start;
+        results.splice(batchStart, batchResults[j].length, ...batchResults[j]);
+      }
+    }
+    
     return results;
   }
 
-  /**
-   * Embed a single batch with retry logic
-   * @param documents - Batch of documents to embed (must fit within batch_size)
-   * @returns Array of embedding vectors
-   * @throws Error if all retries are exhausted
-   */
+  private async embedSingle(text: string): Promise<number[]> {
+    const truncated = this.truncateToContextLimit(text, this.contextLimit);
+    
+    let lastError: Error | null = null;
+
+    for (let attempt = 0; attempt <= this.retryDelays.length; attempt++) {
+      try {
+        return await this.performSingleEmbedding(truncated);
+      } catch (error: unknown) {
+        lastError = error instanceof Error ? error : new Error("Unknown embedding error");
+
+        if (attempt < this.retryDelays.length) {
+          const delay: number = this.retryDelays[attempt];
+          await new Promise((resolve) => setTimeout(resolve, delay));
+        }
+      }
+    }
+
+    throw lastError ?? new Error("Failed to embed query after all retries");
+  }
+
   private async embedBatchWithRetry(documents: string[]): Promise<number[][]> {
     let lastError: Error | null = null;
 
     for (let attempt = 0; attempt <= this.retryDelays.length; attempt++) {
       try {
-        return await this.performEmbedding(documents);
+        return await this.performBatchEmbedding(documents);
       } catch (error: unknown) {
         lastError =
           error instanceof Error
@@ -203,23 +312,63 @@ export class Embedder {
       }
     }
 
-    throw (
-      lastError ?? new Error("Failed to embed documents after all retries")
-    );
+    try {
+      const results: number[][] = [];
+      for (const doc of documents) {
+        const embedding = await this.embedSingle(doc);
+        results.push(embedding);
+      }
+      return results;
+    } catch {
+      throw lastError ?? new Error("Failed to embed documents after all retries");
+    }
   }
 
-  /**
-   * Perform single embedding request
-   * @param documents - Documents to embed
-   * @returns Array of embedding vectors
-   * @throws Error if request fails
-   */
-  private async performEmbedding(documents: string[]): Promise<number[][]> {
+  private async performSingleEmbedding(text: string): Promise<number[]> {
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
     };
 
-    // Add API key if configured
+    if (this.config.api_key_env) {
+      const apiKey: string | undefined = process.env[this.config.api_key_env];
+      if (apiKey) {
+        headers["Authorization"] = `Bearer ${apiKey}`;
+      }
+    }
+
+    const body: Record<string, unknown> = {
+      model: this.config.model,
+      input: text,
+    };
+
+    const response = await fetch(`${this.config.api_base}/embeddings`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const errorText: string = await response.text().catch(() => "");
+      throw new Error(
+        `Embedding API error (${response.status}): ${errorText || response.statusText}`
+      );
+    }
+
+    const data = (await response.json()) as Record<string, unknown>;
+
+    if (!Array.isArray(data.data) || data.data.length === 0) {
+      throw new Error("Invalid embedding response: missing data array");
+    }
+
+    const embedding = (data.data as EmbedderEmbedding[])[0].embedding;
+    return embedding;
+  }
+
+  private async performBatchEmbedding(documents: string[]): Promise<number[][]> {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+
     if (this.config.api_key_env) {
       const apiKey: string | undefined = process.env[this.config.api_key_env];
       if (apiKey) {
@@ -247,7 +396,6 @@ export class Embedder {
 
     const data = (await response.json()) as Record<string, unknown>;
 
-    // Extract embeddings from response
     if (!Array.isArray(data.data)) {
       throw new Error("Invalid embedding response: missing data array");
     }
@@ -263,5 +411,33 @@ export class Embedder {
     }
 
     return embeddings;
+  }
+
+  private generatePlaceholderEmbedding(text: string): number[] {
+    const dims = this.config.dimensions;
+    const embedding = new Float32Array(dims);
+    
+    const hash = simpleHash(text);
+    const seed = hash % 2147483647;
+    let rng = seed;
+    
+    for (let i = 0; i < dims; i++) {
+      rng = (rng * 16807) % 2147483647;
+      embedding[i] = (rng / 2147483647) * 2 - 1;
+    }
+    
+    let magnitude = 0;
+    for (let i = 0; i < dims; i++) {
+      magnitude += embedding[i] * embedding[i];
+    }
+    magnitude = Math.sqrt(magnitude);
+    
+    if (magnitude > 0) {
+      for (let i = 0; i < dims; i++) {
+        embedding[i] /= magnitude;
+      }
+    }
+    
+    return Array.from(embedding);
   }
 }

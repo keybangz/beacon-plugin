@@ -6,13 +6,22 @@ This guide walks you through installing and using the Beacon semantic search plu
 
 - **Node.js** 18.0.0 or higher
 - **OpenCode** installed (latest version)
-- **A local LLM server** running Ollama (or compatible embedding service)
-  - Default: `http://localhost:11434`
-  - Model: `all-minilm:22m` (recommended, 256-token context limit)
+- **Embedding Model** (optional - ONNX runs locally by default)
+  - Default: local ONNX with `all-MiniLM-L6-v2` (384 dimensions)
+  - Alternative: Ollama or other OpenAI-compatible API
 
-### Setting Up Ollama (One-time Setup)
+### Setting Up ONNX (Default - Zero HTTP Latency)
 
-If you don't have Ollama running locally:
+The plugin includes ONNX runtime for local embeddings with zero network latency:
+
+```bash
+# ONNX models are bundled/downloaded automatically
+# No additional setup required!
+```
+
+### Setting Up Ollama (Alternative)
+
+If you prefer Ollama over ONNX:
 
 ```bash
 # Install Ollama from https://ollama.ai
@@ -63,22 +72,22 @@ The plugin uses sensible defaults from `config/beacon.default.json`:
 ```json
 {
   "embedding": {
-    "api_base": "http://localhost:11434",
-    "model": "all-minilm:22m",
+    "api_base": "local",
+    "model": "all-MiniLM-L6-v2",
     "api_key_env": "",
     "dimensions": 384,
-    "batch_size": 50,
+    "batch_size": 32,
     "query_prefix": "",
     "context_limit": 256
   },
   "chunking": {
     "strategy": "hybrid",
-    "max_tokens": 256,
+    "max_tokens": 512,
     "overlap_tokens": 32
   },
   "search": {
     "top_k": 10,
-    "similarity_threshold": 0.35,
+    "similarity_threshold": 0.01,
     "hybrid": {
       "enabled": true,
       "weight_vector": 0.4,
@@ -102,10 +111,10 @@ Create a `.opencode/beacon.json` in your project root to override defaults:
 
 ```bash
 # View current configuration
-opencode config
+config view
 
 # Set a custom value
-opencode config --set search.top_k 10
+config set search.top_k 10
 ```
 
 ## Usage in OpenCode
@@ -130,16 +139,16 @@ Use the semantic search tool:
 
 ```bash
 # Search for authentication patterns
-opencode search "authentication flow"
+search "authentication flow"
 
 # Search with custom parameters
-opencode search "database operations" --topK 10 --threshold 0.2
+search "database operations" --topK 10 --threshold 0.2
 
 # Scope search to a directory
-opencode search "error handling" --pathPrefix src/services/
+search "error handling" --pathPrefix src/services/
 
 # Use pure vector search (disable BM25)
-opencode search "API endpoints" --noHybrid
+search "API endpoints" --noHybrid
 ```
 
 ### 3. View Index Status
@@ -148,32 +157,33 @@ Check the health of your index:
 
 ```bash
 # Quick health check
-opencode status
+status
 
 # Visual dashboard
-opencode index
+index
 
 # Show all indexed files
-opencode index --files
+index --files
 ```
 
 ### 4. Advanced Management
 
 ```bash
 # Clear the entire index
-opencode reindex --confirm
+reindex --confirm
 
 # Add directories to blacklist
-opencode blacklist add "vendor/**"
+blacklist add "vendor/**"
 
 # Remove from blacklist
-opencode blacklist remove "vendor/**"
+blacklist remove "vendor/**"
 
 # View blacklist
-opencode blacklist list
+blacklist list
 
 # Check performance metrics
-opencode performance
+performance cache
+performance metrics
 ```
 
 ## How AI Models Use Beacon
@@ -272,20 +282,20 @@ This tells the AI that semantic search is available and ready to use.
 
 ### Issue: "Embedding server not reachable"
 
-**Solution**: Make sure Ollama is running:
+**Solution**: If using Ollama, make sure it's running:
 ```bash
 ollama serve
 ```
 
 Check the endpoint:
 ```bash
-opencode config
-# Look for: "api_base": "http://localhost:11434"
+config view
+# Look for: "api_base": "local" (default)
 ```
 
 Change if needed:
 ```bash
-opencode config --set embedding.api_base http://your-server:11434
+config set embedding.api_base http://your-server:11434
 ```
 
 ### Issue: "Dimension mismatch"
@@ -293,12 +303,12 @@ opencode config --set embedding.api_base http://your-server:11434
 This happens if you change embedding models. Rebuild:
 ```bash
 npm run build
-opencode reindex --confirm
+reindex --confirm
 ```
 
 ### Issue: "Input length exceeds context length"
 
-This usually means your `context_limit` config exceeds the model's actual context window. For example, `all-minilm:22m` has a 256-token limit, so set:
+This usually means your `context_limit` config exceeds the model's actual context window. For example, ONNX models have a 512-token limit, so set:
 ```json
 {
   "embedding": {
@@ -307,7 +317,7 @@ This usually means your `context_limit` config exceeds the model's actual contex
 }
 ```
 
-Then rebuild and reindex: `npm run build && opencode reindex`
+Then rebuild and reindex: `npm run build && reindex --confirm`
 
 ### Issue: Search returns no results
 
@@ -315,22 +325,22 @@ Try these steps:
 
 1. Check index status:
    ```bash
-   opencode status
+   status
    ```
 
 2. Rebuild if needed:
    ```bash
-   opencode reindex
+   reindex
    ```
 
 3. Lower the threshold:
    ```bash
-   opencode search "query" --threshold 0.2
+   search "query" --threshold 0.001
    ```
 
 4. Check with pure vector search:
    ```bash
-   opencode search "query" --noHybrid
+   search "query" --noHybrid
    ```
 
 ### Issue: Slow indexing
@@ -339,19 +349,19 @@ For large projects:
 
 1. Use blacklist to exclude files:
    ```bash
-   opencode blacklist add "node_modules/**"
-   opencode blacklist add "dist/**"
-   opencode reindex
+   blacklist add "node_modules/**"
+   blacklist add "dist/**"
+   reindex
    ```
 
 2. Increase batch size:
    ```bash
-   opencode config --set embedding.batch_size 64
+   config set embedding.batch_size 64
    ```
 
 3. Check system resources:
    ```bash
-   opencode performance
+   performance metrics
    ```
 
 ## Performance Tuning
@@ -363,24 +373,24 @@ Default settings are optimal.
 ### For Medium Projects (100-1000 files)
 
 ```bash
-opencode config --set embedding.batch_size 64
-opencode config --set search.top_k 10
+config set embedding.batch_size 64
+config set search.top_k 10
 ```
 
 ### For Large Projects (> 1000 files)
 
 ```bash
 # Exclude build artifacts
-opencode blacklist add "node_modules/**"
-opencode blacklist add "dist/**"
-opencode blacklist add "build/**"
+blacklist add "node_modules/**"
+blacklist add "dist/**"
+blacklist add "build/**"
 
 # Tune search
-opencode config --set search.top_k 5
-opencode config --set embedding.batch_size 32
+config set search.top_k 5
+config set embedding.batch_size 32
 
 # Rebuild
-opencode reindex
+reindex --confirm
 ```
 
 ## Next Steps

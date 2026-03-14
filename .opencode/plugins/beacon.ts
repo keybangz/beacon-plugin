@@ -18,6 +18,7 @@ import { loadConfig } from "../src/lib/config.js";
 import { openDatabase } from "../src/lib/db.js";
 import { Embedder } from "../src/lib/embedder.js";
 import { IndexCoordinator } from "../src/lib/sync.js";
+import { getOrCreateWatcher, stopWatcher } from "../src/lib/watcher.js";
 import { join } from "path";
 import { existsSync } from "fs";
 
@@ -99,7 +100,7 @@ function getCoordinator(worktree: string) {
   const storagePath = join(repoRoot, config.storage.path);
   const dbPath = join(storagePath, "embeddings.db");
   const db = openDatabase(dbPath, config.embedding.dimensions);
-  const embedder = new Embedder(config.embedding, config.embedding.context_limit);
+  const embedder = new Embedder(config.embedding, config.embedding.context_limit, storagePath);
   const coordinator = new IndexCoordinator(config, db, embedder, repoRoot);
   return { coordinator, db, config };
 }
@@ -107,6 +108,7 @@ function getCoordinator(worktree: string) {
 /**
  * Beacon plugin for OpenCode
  * Handles:
+ * - Real-time file watching for incremental indexing
  * - Garbage collection after bash/file tool calls
  * - Context injection before compaction
  * - Shell environment setup
@@ -115,9 +117,69 @@ export const BeaconPlugin: Plugin = async ({
   client,
   worktree,
 }) => {
+  const repoRoot = getRepoRoot(worktree);
+  const config = loadConfig(repoRoot);
+  
+  const fileWatcher = getOrCreateWatcher(repoRoot, config);
+  
+  fileWatcher.on("add", async (filePath: string) => {
+    try {
+      const { coordinator, db } = getCoordinator(worktree);
+      await coordinator.reembedFile(filePath);
+      db.close();
+      await client.app.log({
+        body: { service: "beacon", level: "debug", message: `Indexed new file: ${filePath}` },
+      });
+    } catch (err) {
+      await client.app.log({
+        body: { service: "beacon", level: "warn", message: `Failed to index ${filePath}: ${err}` },
+      });
+    }
+  });
+  
+  fileWatcher.on("change", async (filePath: string) => {
+    try {
+      const { coordinator, db } = getCoordinator(worktree);
+      await coordinator.reembedFile(filePath);
+      db.close();
+      await client.app.log({
+        body: { service: "beacon", level: "debug", message: `Reindexed changed file: ${filePath}` },
+      });
+    } catch (err) {
+      await client.app.log({
+        body: { service: "beacon", level: "warn", message: `Failed to reindex ${filePath}: ${err}` },
+      });
+    }
+  });
+  
+  fileWatcher.on("unlink", async (filePath: string) => {
+    try {
+      const { coordinator, db } = getCoordinator(worktree);
+      db.deleteChunks(filePath);
+      coordinator.garbageCollect();
+      db.close();
+      await client.app.log({
+        body: { service: "beacon", level: "debug", message: `Removed deleted file: ${filePath}` },
+      });
+    } catch (err) {
+      await client.app.log({
+        body: { service: "beacon", level: "warn", message: `Failed to remove ${filePath}: ${err}` },
+      });
+    }
+  });
+  
+  fileWatcher.on("error", async (error: Error) => {
+    await client.app.log({
+      body: { service: "beacon", level: "error", message: `File watcher error: ${error.message}` },
+    });
+  });
+  
+  fileWatcher.start();
+
   return {
-    // Custom tools
+    // Custom tools - search replaces built-in grep with semantic search
     tool: {
+      grep: SearchTool,
       search: SearchTool,
       index: IndexTool,
       reindex: ReindexTool,

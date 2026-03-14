@@ -62,9 +62,7 @@ export async function benchmarkDatabase(db, config) {
             size: cacheStats.size,
             hits: cacheStats.hits,
             misses: cacheStats.misses,
-            evictions: cacheStats.evictions,
             hitRate: cacheStats.hitRate,
-            uptime: cacheStats.uptime,
         },
     });
     // Benchmark metrics retrieval
