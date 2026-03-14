@@ -1,15 +1,13 @@
 /**
  * Beacon Database Layer
  * SQLite with FTS5 for keyword matching
- * Ported to Bun:SQLite for OpenCode compatibility
  *
  * Schema:
  * - chunks: source code chunks with embeddings and metadata
  * - chunks_fts: FTS5 for full-text search
  * - sync_state: key-value store for indexing state
  */
-
-import { Database } from "bun:sqlite";
+import Database from "bun:sqlite";
 import { statSync } from "fs";
 import { dirname, join } from "path";
 import type {
@@ -56,7 +54,7 @@ export class BeaconDatabase {
     this.dimensions = dimensions;
     this.useHNSW = useHNSW;
     this.init();
-    
+
     if (this.useHNSW) {
       const storagePath = dirname(dbPath);
       this.hnswIndex = new HNSWVectorIndex(dimensions, storagePath);
@@ -70,10 +68,10 @@ export class BeaconDatabase {
   private init(): void {
     // Set pragmas for performance (Bun:SQLite compatible)
     this.db.exec("PRAGMA journal_mode = WAL");
-    this.db.exec("PRAGMA synchronous = NORMAL");   // faster writes, still safe with WAL
-    this.db.exec("PRAGMA cache_size = -32000");     // 32MB page cache
-    this.db.exec("PRAGMA temp_store = MEMORY");     // temp tables in RAM
-    this.db.exec("PRAGMA mmap_size = 536870912");   // 512MB memory-mapped I/O
+    this.db.exec("PRAGMA synchronous = NORMAL"); // faster writes, still safe with WAL
+    this.db.exec("PRAGMA cache_size = -32000"); // 32MB page cache
+    this.db.exec("PRAGMA temp_store = MEMORY"); // temp tables in RAM
+    this.db.exec("PRAGMA mmap_size = 536870912"); // 512MB memory-mapped I/O
     this.db.exec("PRAGMA busy_timeout = 5000");
     this.db.exec("PRAGMA foreign_keys = ON");
 
@@ -162,7 +160,7 @@ export class BeaconDatabase {
   private migrateToV2(): void {
     const currentVersion = parseInt(
       this.getSyncState("schema_version") ?? "1",
-      10
+      10,
     );
 
     if (currentVersion >= SCHEMA_VERSION) {
@@ -170,15 +168,13 @@ export class BeaconDatabase {
     }
 
     // Add identifiers column if missing
-    const cols = this.db
-      .prepare("PRAGMA table_info(chunks)")
-      .all() as Array<{ name: string }>;
+    const cols = this.db.prepare("PRAGMA table_info(chunks)").all() as Array<{
+      name: string;
+    }>;
     const hasIdentifiers = cols.some((c) => c.name === "identifiers");
 
     if (!hasIdentifiers) {
-      this.db.exec(
-        'ALTER TABLE chunks ADD COLUMN identifiers TEXT DEFAULT ""'
-      );
+      this.db.exec('ALTER TABLE chunks ADD COLUMN identifiers TEXT DEFAULT ""');
     }
 
     // Create FTS5 virtual table
@@ -200,7 +196,7 @@ export class BeaconDatabase {
 
     if (allChunks.length > 0) {
       const insertFts = this.db.prepare(
-        "INSERT OR IGNORE INTO chunks_fts(rowid, file_path, chunk_text, identifiers) VALUES (?, ?, ?, ?)"
+        "INSERT OR IGNORE INTO chunks_fts(rowid, file_path, chunk_text, identifiers) VALUES (?, ?, ?, ?)",
       );
 
       const transaction = this.db.transaction(() => {
@@ -209,7 +205,7 @@ export class BeaconDatabase {
             chunk.id,
             chunk.file_path,
             chunk.chunk_text,
-            chunk.identifiers
+            chunk.identifiers,
           );
         }
       });
@@ -226,7 +222,7 @@ export class BeaconDatabase {
   private migrateToV3(): void {
     const currentVersion = parseInt(
       this.getSyncState("schema_version") ?? "1",
-      10
+      10,
     );
 
     if (currentVersion >= 3) {
@@ -255,7 +251,7 @@ export class BeaconDatabase {
   private migrateToV4(): void {
     const currentVersion = parseInt(
       this.getSyncState("schema_version") ?? "1",
-      10
+      10,
     );
 
     if (currentVersion >= 4) {
@@ -333,11 +329,11 @@ export class BeaconDatabase {
     filePath: string,
     chunks: Array<{ text: string; start_line: number; end_line: number }>,
     embeddings: number[][],
-    fileHash: string
+    fileHash: string,
   ): void {
     if (chunks.length !== embeddings.length) {
       throw new Error(
-        `Chunk count mismatch: ${chunks.length} chunks but ${embeddings.length} embeddings`
+        `Chunk count mismatch: ${chunks.length} chunks but ${embeddings.length} embeddings`,
       );
     }
 
@@ -345,17 +341,21 @@ export class BeaconDatabase {
       this.hnswIndex.removeFile(filePath);
     }
 
-    const deleteChunks = this.db.prepare("DELETE FROM chunks WHERE file_path = ?");
-    const deleteFts = this.db.prepare("DELETE FROM chunks_fts WHERE file_path = ?");
+    const deleteChunks = this.db.prepare(
+      "DELETE FROM chunks WHERE file_path = ?",
+    );
+    const deleteFts = this.db.prepare(
+      "DELETE FROM chunks_fts WHERE file_path = ?",
+    );
     const insertChunk = this.db.prepare(
       `INSERT INTO chunks
        (file_path, chunk_index, chunk_text, start_line, end_line, embedding, file_hash, identifiers)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     const lastInsertId = this.db.prepare("SELECT last_insert_rowid() as id");
     const insertFts = this.db.prepare(
       `INSERT INTO chunks_fts(rowid, file_path, chunk_text, identifiers)
-       VALUES (?, ?, ?, ?)`
+       VALUES (?, ?, ?, ?)`,
     );
 
     const transaction = this.db.transaction(() => {
@@ -365,9 +365,9 @@ export class BeaconDatabase {
       for (let i = 0; i < chunks.length; i++) {
         const chunk = chunks[i];
         const embedding = embeddings[i];
-        const identifiers = Array.from(
-          extractIdentifiers(chunk.text)
-        ).join(" ");
+        const identifiers = Array.from(extractIdentifiers(chunk.text)).join(
+          " ",
+        );
 
         insertChunk.run(
           filePath,
@@ -377,24 +377,20 @@ export class BeaconDatabase {
           chunk.end_line,
           embeddingToBuffer(embedding),
           fileHash,
-          identifiers
+          identifiers,
         );
 
         const chunkId = (lastInsertId.get() as { id: number }).id;
         insertFts.run(chunkId, filePath, chunk.text, identifiers);
 
         if (this.hnswIndex) {
-          this.hnswIndex.addVector(
-            `${filePath}:${i}`,
-            embedding,
-            {
-              filePath,
-              startLine: chunk.start_line,
-              endLine: chunk.end_line,
-              chunkText: chunk.text,
-              chunkId: `${filePath}:${i}`,
-            }
-          );
+          this.hnswIndex.addVector(`${filePath}:${i}`, embedding, {
+            filePath,
+            startLine: chunk.start_line,
+            endLine: chunk.end_line,
+            chunkText: chunk.text,
+            chunkId: `${filePath}:${i}`,
+          });
         }
       }
     });
@@ -411,7 +407,9 @@ export class BeaconDatabase {
     }
     const transaction = this.db.transaction(() => {
       this.db.prepare("DELETE FROM chunks WHERE file_path = ?").run(filePath);
-      this.db.prepare("DELETE FROM chunks_fts WHERE file_path = ?").run(filePath);
+      this.db
+        .prepare("DELETE FROM chunks_fts WHERE file_path = ?")
+        .run(filePath);
     });
 
     transaction();
@@ -428,10 +426,14 @@ export class BeaconDatabase {
     query: string,
     config: BeaconConfig,
     pathPrefix?: string,
-    noHybrid?: boolean
+    noHybrid?: boolean,
   ): SearchResult[] {
     // Check cache first (include noHybrid in options to avoid cross-mode cache hits)
-    const optionsHash = this.hashOptions({ topK, pathPrefix, noHybrid: noHybrid ?? false });
+    const optionsHash = this.hashOptions({
+      topK,
+      pathPrefix,
+      noHybrid: noHybrid ?? false,
+    });
     const cachedResults = this.getCachedResults(query, optionsHash);
     if (cachedResults) {
       this.incrementCacheStat("hits");
@@ -447,7 +449,7 @@ export class BeaconDatabase {
     const vectorResults = this.vectorSearch(
       queryEmbedding,
       topK * 2,
-      pathPrefix
+      pathPrefix,
     );
     timer.mark("vector_search");
 
@@ -475,7 +477,7 @@ export class BeaconDatabase {
         query,
         topK,
         threshold,
-        config
+        config,
       );
       timer.mark("combine_results");
     }
@@ -506,9 +508,12 @@ export class BeaconDatabase {
   /**
    * Get cached search results
    */
-  private getCachedResults(query: string, optionsHash: number): SearchResult[] | null {
+  private getCachedResults(
+    query: string,
+    optionsHash: number,
+  ): SearchResult[] | null {
     const key = `${query}#${optionsHash}`;
-    
+
     const row = this.db
       .prepare("SELECT value, timestamp FROM search_cache WHERE key = ?")
       .get(key) as { value: string; timestamp: number } | undefined;
@@ -528,19 +533,31 @@ export class BeaconDatabase {
   /**
    * Cache search results
    */
-  private cacheResults(query: string, results: SearchResult[], optionsHash: number): void {
+  private cacheResults(
+    query: string,
+    results: SearchResult[],
+    optionsHash: number,
+  ): void {
     const key = `${query}#${optionsHash}`;
     const value = JSON.stringify(results);
     const timestamp = Date.now();
 
     // Clean up old entries if cache is large
-    const count = (this.db.prepare("SELECT COUNT(*) as c FROM search_cache").get() as { c: number }).c;
+    const count = (
+      this.db.prepare("SELECT COUNT(*) as c FROM search_cache").get() as {
+        c: number;
+      }
+    ).c;
     if (count > 1000) {
-      this.db.prepare("DELETE FROM search_cache WHERE timestamp < ?").run(Date.now() - CACHE_TTL_MS);
+      this.db
+        .prepare("DELETE FROM search_cache WHERE timestamp < ?")
+        .run(Date.now() - CACHE_TTL_MS);
     }
 
     this.db
-      .prepare("INSERT OR REPLACE INTO search_cache (key, value, timestamp, options_hash) VALUES (?, ?, ?, ?)")
+      .prepare(
+        "INSERT OR REPLACE INTO search_cache (key, value, timestamp, options_hash) VALUES (?, ?, ?, ?)",
+      )
       .run(key, value, timestamp, optionsHash);
   }
 
@@ -557,20 +574,42 @@ export class BeaconDatabase {
    */
   private incrementCacheStat(stat: string): void {
     this.db
-      .prepare(`
+      .prepare(
+        `
         INSERT INTO cache_stats (key, value) VALUES (?, 1)
         ON CONFLICT(key) DO UPDATE SET value = value + 1
-      `)
+      `,
+      )
       .run(stat);
   }
 
   /**
    * Get cache statistics
    */
-  getCacheStats(): { hits: number; misses: number; size: number; hitRate: number; uptime: number } {
-    const hits = (this.db.prepare("SELECT value FROM cache_stats WHERE key = 'hits'").get() as { value: number } | undefined)?.value ?? 0;
-    const misses = (this.db.prepare("SELECT value FROM cache_stats WHERE key = 'misses'").get() as { value: number } | undefined)?.value ?? 0;
-    const size = (this.db.prepare("SELECT COUNT(*) as c FROM search_cache").get() as { c: number }).c;
+  getCacheStats(): {
+    hits: number;
+    misses: number;
+    size: number;
+    hitRate: number;
+    uptime: number;
+  } {
+    const hits =
+      (
+        this.db
+          .prepare("SELECT value FROM cache_stats WHERE key = 'hits'")
+          .get() as { value: number } | undefined
+      )?.value ?? 0;
+    const misses =
+      (
+        this.db
+          .prepare("SELECT value FROM cache_stats WHERE key = 'misses'")
+          .get() as { value: number } | undefined
+      )?.value ?? 0;
+    const size = (
+      this.db.prepare("SELECT COUNT(*) as c FROM search_cache").get() as {
+        c: number;
+      }
+    ).c;
     const total = hits + misses;
     const hitRate = total > 0 ? hits / total : 0;
 
@@ -584,11 +623,15 @@ export class BeaconDatabase {
   private vectorSearch(
     queryEmbedding: number[],
     limit: number,
-    pathPrefix?: string
+    pathPrefix?: string,
   ): SearchResult[] {
     if (this.hnswIndex) {
       if (pathPrefix) {
-        return this.hnswIndex.searchWithPathFilter(queryEmbedding, limit, pathPrefix);
+        return this.hnswIndex.searchWithPathFilter(
+          queryEmbedding,
+          limit,
+          pathPrefix,
+        );
       }
       return this.hnswIndex.search(queryEmbedding, limit);
     }
@@ -601,7 +644,7 @@ export class BeaconDatabase {
   private vectorSearchBruteForce(
     queryEmbedding: number[],
     limit: number,
-    pathPrefix?: string
+    pathPrefix?: string,
   ): SearchResult[] {
     // Fetch all stored embeddings (with optional path filter)
     let sql = `
@@ -644,7 +687,8 @@ export class BeaconDatabase {
       const n = arr.length;
       while (true) {
         let smallest = i;
-        const l = 2 * i + 1, r = 2 * i + 2;
+        const l = 2 * i + 1,
+          r = 2 * i + 2;
         if (l < n && arr[l][0] < arr[smallest][0]) smallest = l;
         if (r < n && arr[r][0] < arr[smallest][0]) smallest = r;
         if (smallest === i) break;
@@ -664,10 +708,15 @@ export class BeaconDatabase {
 
     for (let rowIdx = 0; rowIdx < rows.length; rowIdx++) {
       const buf = rows[rowIdx].embedding;
-      const vec = new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4);
+      const vec = new Float32Array(
+        buf.buffer,
+        buf.byteOffset,
+        buf.byteLength / 4,
+      );
       if (vec.length !== dims) continue;
 
-      let dot = 0, magSq = 0;
+      let dot = 0,
+        magSq = 0;
       for (let i = 0; i < dims; i++) {
         dot += qVec[i] * vec[i];
         magSq += vec[i] * vec[i];
@@ -704,7 +753,7 @@ export class BeaconDatabase {
   private bm25Search(
     query: string,
     limit: number,
-    pathPrefix?: string
+    pathPrefix?: string,
   ): SearchResult[] {
     const ftsQuery = prepareFTSQuery(query);
 
@@ -763,7 +812,7 @@ export class BeaconDatabase {
   ftsOnlySearch(
     query: string,
     limit: number,
-    pathPrefix?: string
+    pathPrefix?: string,
   ): SearchResult[] {
     const ftsQuery = prepareFTSQuery(query);
 
@@ -825,11 +874,14 @@ export class BeaconDatabase {
     query: string,
     topK: number,
     threshold: number,
-    config: BeaconConfig
+    config: BeaconConfig,
   ): SearchResult[] {
     const combined = new Map<
       string,
-      SearchResult & { ranks: { vector?: number; bm25?: number }; rrfScore: number }
+      SearchResult & {
+        ranks: { vector?: number; bm25?: number };
+        rrfScore: number;
+      }
     >();
 
     // Add vector results with ranks and raw similarity
@@ -875,11 +927,11 @@ export class BeaconDatabase {
       // Calculate identifier boost
       const chunkIdentifiers = extractIdentifiers(result.chunkText);
       const identifierMatches = Array.from(queryIdentifiers).filter((id) =>
-        chunkIdentifiers.has(id)
+        chunkIdentifiers.has(id),
       ).length;
       const identifierBoost = getIdentifierBoost(
         identifierMatches,
-        config.search.hybrid.identifier_boost
+        config.search.hybrid.identifier_boost,
       );
 
       // Apply file type multiplier
@@ -1051,7 +1103,7 @@ export class BeaconDatabase {
 
     transaction();
     this.clearCache();
-    
+
     if (this.hnswIndex) {
       this.hnswIndex.clear();
     }
@@ -1069,16 +1121,30 @@ export class BeaconDatabase {
   /**
    * Get performance metrics summary
    */
-  getMetrics(): Record<string, { count: number; min: number; max: number; avg: number }> {
+  getMetrics(): Record<
+    string,
+    { count: number; min: number; max: number; avg: number }
+  > {
     const rows = this.db
-      .prepare(`
+      .prepare(
+        `
         SELECT name, COUNT(*) as count, MIN(value) as min, MAX(value) as max, AVG(value) as avg
         FROM metrics
         GROUP BY name
-      `)
-      .all() as Array<{ name: string; count: number; min: number; max: number; avg: number }>;
+      `,
+      )
+      .all() as Array<{
+      name: string;
+      count: number;
+      min: number;
+      max: number;
+      avg: number;
+    }>;
 
-    const result: Record<string, { count: number; min: number; max: number; avg: number }> = {};
+    const result: Record<
+      string,
+      { count: number; min: number; max: number; avg: number }
+    > = {};
     for (const row of rows) {
       result[row.name] = {
         count: row.count,
@@ -1115,7 +1181,7 @@ export class BeaconDatabase {
 export function openDatabase(
   dbPath: string,
   dimensions: number,
-  useHNSW: boolean = true
+  useHNSW: boolean = true,
 ): BeaconDatabase {
   return new BeaconDatabase(dbPath, dimensions, useHNSW);
 }

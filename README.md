@@ -27,22 +27,23 @@
 ### Option A: Install from Source
 
 ```bash
-git clone https://github.com/sagarmk/beacon-opencode
+git clone https://github.com/keybangz/beacon-opencode
 cd beacon-opencode
 npm install
 npm run build
+npm pack
 ```
 
-Then add to your `.opencode/opencode.json`:
-```json
-{
-  "plugin": ["./path/to/beacon-opencode/.opencode/plugins/beacon.ts"]
-}
+```bash
+cd ~/.config/opencode
+npm install ./path-to-packed-plugin.tgz
 ```
+
+Add `beacon-opencode` to your `plugin` array in `opencode.json`.
 
 ### Configure Embeddings
 
-**Option 1: Local ONNX (Zero HTTP latency)**
+**Option 1: Local ONNX (Zero HTTP latency)** - This is the default, no configuration file needed.
 ```json
 // .opencode/beacon.json
 {
@@ -81,10 +82,7 @@ search "authentication flow"
 search "database connection logic"
 search "error handling in API"
 
-## Documentation
 
-- **[SETUP_OPENCODE.md](./SETUP_OPENCODE.md)** — Complete setup and usage guide for installing Beacon with OpenCode
-- **[EXAMPLES.md](./EXAMPLES.md)** — Real-world usage examples and workflows
 
 ## Tools
 
@@ -128,16 +126,7 @@ blacklist list                       # Show blacklisted dirs
 ```
 beacon-plugin/
 ├── .opencode/
-│   ├── src/
-│   │   └── lib/              # Compiled JavaScript (output of npm run build)
-│   │       ├── chunker.js
-│   │       ├── sync.js
-│   │       ├── embedder.js
-│   │       ├── hnsw.js
-│   │       ├── cache.js
-│   │       ├── reranker.js
-│   │       └── ...
-│   ├── tools/                # OpenCode tools (import compiled .js files)
+│   ├── tools/                # OpenCode tools
 │   │   ├── search.ts
 │   │   ├── index.ts
 │   │   ├── status.ts
@@ -149,28 +138,26 @@ beacon-plugin/
 │   │   └── terminate-indexer.ts
 │   └── plugins/
 │       └── beacon.ts         # Plugin entry point with event hooks
-├── src/lib/                  # TypeScript source
-│   ├── types.ts
-│   ├── db.ts
-│   ├── tokenizer.ts
-│   ├── chunker.ts
-│   ├── embedder.ts
-│   ├── onnx-embedder.ts
-│   ├── bert-tokenizer.ts
-│   ├── code-tokenizer.ts
-│   ├── hnsw.ts
-│   ├── cache.ts
-│   ├── reranker.ts
-│   ├── config.ts
-│   ├── git.ts
-│   ├── ignore.ts
-│   ├── repo-root.ts
-│   ├── safety.ts
-│   └── watcher.ts
-├── config/
-│   └── beacon.default.json   # Default configuration
+├── src/
+│   └── lib/                  # TypeScript source
+│       ├── types.ts
+│       ├── db.ts
+│       ├── config.ts
+│       ├── repo-root.ts
+│       ├── chunker.ts
+│       ├── embedder.ts
+│       ├── hnsw.ts
+│       ├── cache.ts
+│       ├── reranker.ts
+│       ├── tokenizer.ts
+│       ├── git.ts
+│       ├── ignore.ts
+│       ├── safety.ts
+│       └── watcher.ts
+├── dist/                     # Bundled plugin (output of npm run build)
+│   └── index.js
 ├── package.json
-└── tsconfig.json
+└── README.md
 ```
 
 ### Event Hooks
