@@ -1,9 +1,11 @@
 import type { EmbedderResult } from "./types.js";
+export type ModelType = "bert" | "codebert" | "unixcoder" | "sentence-transformer";
 export interface ONNXEmbedderConfig {
     modelPath: string;
     dimensions: number;
     maxTokens: number;
     cacheSize?: number;
+    modelType?: ModelType;
 }
 export declare class ONNXEmbedder {
     private session;

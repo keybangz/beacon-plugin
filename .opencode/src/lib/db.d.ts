@@ -17,8 +17,6 @@ export declare class BeaconDatabase {
     private db;
     private dbPath;
     private dimensions;
-    private searchCache;
-    private performanceMetrics;
     private hnswIndex;
     private useHNSW;
     constructor(dbPath: string, dimensions: number, useHNSW?: boolean);
@@ -30,6 +28,14 @@ export declare class BeaconDatabase {
      * Migrate to schema version 2 (add identifiers + FTS5)
      */
     private migrateToV2;
+    /**
+     * Migrate to schema version 3 (add metrics table)
+     */
+    private migrateToV3;
+    /**
+     * Migrate to schema version 4 (add persistent search cache)
+     */
+    private migrateToV4;
     /**
      * Check if database dimensions match config
      * Note: With BM25-only search, dimensions are not stored in database
@@ -53,6 +59,36 @@ export declare class BeaconDatabase {
      * When noHybrid=true, returns pure vector search results without BM25 combination
      */
     search(queryEmbedding: number[], topK: number, threshold: number, query: string, config: BeaconConfig, pathPrefix?: string, noHybrid?: boolean): SearchResult[];
+    /**
+     * Hash options object for cache key
+     */
+    private hashOptions;
+    /**
+     * Get cached search results
+     */
+    private getCachedResults;
+    /**
+     * Cache search results
+     */
+    private cacheResults;
+    /**
+     * Clear search cache
+     */
+    clearCache(): void;
+    /**
+     * Increment cache stat counter
+     */
+    private incrementCacheStat;
+    /**
+     * Get cache statistics
+     */
+    getCacheStats(): {
+        hits: number;
+        misses: number;
+        size: number;
+        hitRate: number;
+        uptime: number;
+    };
     /**
      * Vector similarity search
      * Uses HNSW index for O(log n) search when available, falls back to brute-force.
@@ -127,10 +163,6 @@ export declare class BeaconDatabase {
         max: number;
         avg: number;
     }>;
-    /**
-     * Get cache statistics
-     */
-    getCacheStats(): ReturnType<typeof this.searchCache.getStats>;
     /**
      * Clear performance metrics
      */

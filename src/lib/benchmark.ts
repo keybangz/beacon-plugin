@@ -103,9 +103,7 @@ export async function benchmarkDatabase(
       size: cacheStats.size,
       hits: cacheStats.hits,
       misses: cacheStats.misses,
-      evictions: cacheStats.evictions,
       hitRate: cacheStats.hitRate,
-      uptime: cacheStats.uptime,
     },
   });
 

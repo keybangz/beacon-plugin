@@ -9,4 +9,13 @@ export declare function getFileTypeMultiplier(filePath: string): number;
 export declare function getIdentifierBoost(identifierMatches: number, identifierBoost: number): number;
 export declare function prepareFTSQuery(query: string): string;
 export declare function clearCaches(): void;
+export declare function expandQuery(query: string): string[];
+export declare function splitCamelCase(str: string): string[];
+export declare function extractCodeTerms(query: string): string[];
+export declare function buildExpandedQuery(query: string): {
+    original: string;
+    expanded: string[];
+    codeTerms: string[];
+    ftsQuery: string;
+};
 //# sourceMappingURL=tokenizer.d.ts.map

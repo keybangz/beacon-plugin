@@ -1,64 +1,8 @@
 import { InferenceSession, Tensor } from "onnxruntime-node";
-import { readFileSync, existsSync } from "fs";
-import { join, dirname } from "path";
-class SimpleTokenizer {
-    constructor(vocabPath, maxTokens) {
-        this.vocab = new Map();
-        this.unkTokenId = 0;
-        this.clsTokenId = 101;
-        this.sepTokenId = 102;
-        this.padTokenId = 0;
-        this.maxTokens = maxTokens;
-        this.loadVocab(vocabPath);
-    }
-    loadVocab(vocabPath) {
-        if (!existsSync(vocabPath)) {
-            return;
-        }
-        try {
-            const vocabData = JSON.parse(readFileSync(vocabPath, "utf-8"));
-            if (Array.isArray(vocabData)) {
-                vocabData.forEach((token, idx) => {
-                    this.vocab.set(token, idx);
-                });
-            }
-            else if (typeof vocabData === "object") {
-                for (const [token, idx] of Object.entries(vocabData)) {
-                    this.vocab.set(token, idx);
-                }
-            }
-        }
-        catch {
-            // Use basic tokenization if vocab not available
-        }
-    }
-    tokenize(text) {
-        const tokens = this.basicTokenize(text);
-        const inputIds = [this.clsTokenId];
-        const attentionMask = [1];
-        for (const token of tokens) {
-            if (inputIds.length >= this.maxTokens - 1)
-                break;
-            const tokenId = this.vocab.get(token.toLowerCase()) ?? this.unkTokenId;
-            inputIds.push(tokenId);
-            attentionMask.push(1);
-        }
-        inputIds.push(this.sepTokenId);
-        attentionMask.push(1);
-        while (inputIds.length < this.maxTokens) {
-            inputIds.push(this.padTokenId);
-            attentionMask.push(0);
-        }
-        return { inputIds, attentionMask };
-    }
-    basicTokenize(text) {
-        return text
-            .toLowerCase()
-            .replace(/[^\w\s]/g, " ")
-            .split(/\s+/)
-            .filter((t) => t.length > 0);
-    }
-}
+import { existsSync } from "fs";
+import { dirname, join } from "path";
+import { BertTokenizer } from "./bert-tokenizer.js";
+import { CodeBertTokenizer } from "./code-tokenizer.js";
 export class ONNXEmbedder {
     constructor(config) {
         this.session = null;
@@ -82,8 +26,22 @@ export class ONNXEmbedder {
                 executionProviders: ["cpu"],
                 graphOptimizationLevel: "all",
             });
-            const vocabPath = join(dirname(this.config.modelPath), "vocab.json");
-            this.tokenizer = new SimpleTokenizer(vocabPath, this.config.maxTokens);
+            const vocabPath = join(dirname(this.config.modelPath), "vocab.txt");
+            if (existsSync(vocabPath)) {
+                const modelType = this.config.modelType ?? "bert";
+                if (modelType === "codebert" || modelType === "unixcoder") {
+                    this.tokenizer = new CodeBertTokenizer(vocabPath);
+                }
+                else {
+                    this.tokenizer = new BertTokenizer(vocabPath);
+                }
+            }
+            else {
+                return {
+                    ok: false,
+                    error: `Vocabulary not found at ${vocabPath}`,
+                };
+            }
             this.initialized = true;
             return { ok: true };
         }
@@ -101,18 +59,26 @@ export class ONNXEmbedder {
         const cached = this.queryCache.get(text);
         if (cached)
             return cached;
-        const { inputIds, attentionMask } = this.tokenizer.tokenize(text);
-        const inputIdsTensor = new Tensor("int64", BigInt64Array.from(inputIds.map(BigInt)), [1, inputIds.length]);
-        const attentionMaskTensor = new Tensor("int64", BigInt64Array.from(attentionMask.map(BigInt)), [1, attentionMask.length]);
+        const inputIds = this.tokenizer.encode(text, true);
+        const attentionMask = inputIds.map(() => 1);
+        const seqLength = Math.min(inputIds.length, this.config.maxTokens);
+        const truncatedIds = inputIds.slice(0, seqLength);
+        const truncatedMask = attentionMask.slice(0, seqLength);
+        while (truncatedIds.length < this.config.maxTokens) {
+            truncatedIds.push(this.tokenizer.getPadTokenId());
+            truncatedMask.push(0);
+        }
+        const inputIdsTensor = new Tensor("int64", BigInt64Array.from(truncatedIds.map(BigInt)), [1, truncatedIds.length]);
+        const attentionMaskTensor = new Tensor("int64", BigInt64Array.from(truncatedMask.map(BigInt)), [1, truncatedMask.length]);
         const feeds = {
             input_ids: inputIdsTensor,
             attention_mask: attentionMaskTensor,
-            token_type_ids: new Tensor("int64", BigInt64Array.from(new Array(inputIds.length).fill(BigInt(0))), [1, inputIds.length]),
+            token_type_ids: new Tensor("int64", BigInt64Array.from(new Array(truncatedIds.length).fill(BigInt(0))), [1, truncatedIds.length]),
         };
         const results = await this.session.run(feeds);
         const outputName = this.session.outputNames[0];
         const output = results[outputName];
-        const embedding = this.meanPool(output.data, attentionMask);
+        const embedding = this.meanPool(output.data, truncatedMask);
         if (this.queryCache.size >= (this.config.cacheSize ?? 256)) {
             const firstKey = this.queryCache.keys().next().value;
             if (firstKey)

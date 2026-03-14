@@ -48,9 +48,8 @@ export default tool({
           output += `├─ Size: ${stats.size} entries\n`;
           output += `├─ Hits: ${stats.hits}\n`;
           output += `├─ Misses: ${stats.misses}\n`;
-          output += `├─ Evictions: ${stats.evictions}\n`;
           output += `├─ Hit Rate: ${(stats.hitRate * 100).toFixed(2)}%\n`;
-          output += `└─ Uptime: ${(stats.uptime / 1000 / 60).toFixed(2)} minutes\n`;
+          output += `└─ Total Queries: ${stats.hits + stats.misses}\n`;
 
           if (options.verbose) {
             output += "\n💡 CACHE ANALYSIS\n";
@@ -110,7 +109,7 @@ export default tool({
             const results = db.search(
               embedding[0],
               5,
-              0.5,
+              config.search?.similarity_threshold ?? 0.01,
               query,
               config
             );
@@ -146,8 +145,7 @@ export default tool({
           output += `├─ Size: ${cacheStats.size}/${1000} entries\n`;
           output += `├─ Hit Rate: ${(cacheStats.hitRate * 100).toFixed(2)}%\n`;
           output += `├─ Total Hits: ${cacheStats.hits}\n`;
-          output += `├─ Total Misses: ${cacheStats.misses}\n`;
-          output += `└─ Evictions: ${cacheStats.evictions}\n`;
+          output += `└─ Total Misses: ${cacheStats.misses}\n`;
 
           if (Object.keys(metrics).length > 0) {
             output += "\n📊 OPERATION METRICS\n";

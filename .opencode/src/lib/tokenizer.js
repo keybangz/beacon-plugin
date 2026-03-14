@@ -13,6 +13,25 @@ const COMMON_KEYWORDS = new Set([
     "null", "undefined", "true", "false", "void", "never", "any", "string",
     "number", "boolean", "object", "symbol", "bigint",
 ]);
+const CODE_SYNONYMS = {
+    "auth": ["authentication", "login", "signin", "credential"],
+    "authentication": ["auth", "login", "signin", "credential"],
+    "db": ["database", "sql", "query", "storage"],
+    "database": ["db", "sql", "query", "storage"],
+    "api": ["endpoint", "route", "handler", "controller"],
+    "handler": ["callback", "listener", "event", "api"],
+    "config": ["configuration", "settings", "options", "env"],
+    "error": ["exception", "error", "fail", "throw"],
+    "exception": ["error", "exception", "fail", "throw"],
+    "test": ["spec", "testing", "unittest", "vitest"],
+    "util": ["utility", "helper", "tool", "lib"],
+    "async": ["asynchronous", "promise", "await", "callback"],
+    "http": ["request", "response", "fetch", "api"],
+    "cache": ["cached", "memoize", "store", "memory"],
+    "vector": ["embedding", "semantic", "similarity"],
+    "search": ["find", "query", "lookup", "match"],
+    "index": ["indexed", "indices", "catalog", "directory"],
+};
 const identifierCache = new Map();
 const IDENTIFIER_CACHE_MAX = 500;
 export function extractIdentifiers(code) {
@@ -116,5 +135,60 @@ export function prepareFTSQuery(query) {
 }
 export function clearCaches() {
     identifierCache.clear();
+}
+export function expandQuery(query) {
+    const words = query.toLowerCase().split(/\s+/).filter(w => w.length > 0);
+    const expanded = new Set(words);
+    for (const word of words) {
+        const synonyms = CODE_SYNONYMS[word];
+        if (synonyms) {
+            for (const syn of synonyms) {
+                expanded.add(syn);
+            }
+        }
+        const parts = splitCamelCase(word);
+        for (const part of parts) {
+            if (part.length > 2) {
+                expanded.add(part);
+            }
+        }
+    }
+    return Array.from(expanded);
+}
+export function splitCamelCase(str) {
+    return str
+        .replace(/([a-z])([A-Z])/g, '$1 $2')
+        .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+        .split(/[\s_-]+/)
+        .filter(s => s.length > 0);
+}
+export function extractCodeTerms(query) {
+    const terms = [];
+    const quotedMatch = query.match(/"([^"]+)"/g);
+    if (quotedMatch) {
+        for (const m of quotedMatch) {
+            terms.push(m.slice(1, -1));
+        }
+    }
+    const codePattern = /\b([a-zA-Z_$][a-zA-Z0-9_$]*)\b/g;
+    let match;
+    while ((match = codePattern.exec(query)) !== null) {
+        if (match[1].length > 2 && !COMMON_KEYWORDS.has(match[1].toLowerCase())) {
+            terms.push(match[1]);
+        }
+    }
+    return [...new Set(terms)];
+}
+export function buildExpandedQuery(query) {
+    const expanded = expandQuery(query);
+    const codeTerms = extractCodeTerms(query);
+    const allTerms = [...new Set([...expanded, ...codeTerms])];
+    const ftsQuery = allTerms.slice(0, 10).join(" OR ");
+    return {
+        original: query,
+        expanded,
+        codeTerms,
+        ftsQuery,
+    };
 }
 //# sourceMappingURL=tokenizer.js.map
