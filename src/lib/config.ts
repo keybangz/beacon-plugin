@@ -8,6 +8,70 @@ import { join } from "path";
 import type { BeaconConfig, MergedConfig } from "./types.js";
 import { getRepoRoot } from "./repo-root.js";
 
+const DEFAULT_CONFIG: BeaconConfig = {
+  embedding: {
+    api_base: "local",
+    model: "all-MiniLM-L6-v2",
+    dimensions: 384,
+    batch_size: 32,
+    context_limit: 256,
+    query_prefix: "",
+    api_key_env: "",
+    enabled: true
+  },
+  chunking: {
+    strategy: "hybrid",
+    max_tokens: 512,
+    overlap_tokens: 32
+  },
+  indexing: {
+    include: [
+      "**/*.ts",
+      "**/*.tsx",
+      "**/*.js",
+      "**/*.jsx",
+      "**/*.py",
+      "**/*.go",
+      "**/*.rs",
+      "**/*.java",
+      "**/*.rb",
+      "**/*.php",
+      "**/*.sql",
+      "**/*.md"
+    ],
+    exclude: [
+      "node_modules/**",
+      "dist/**",
+      "build/**",
+      ".next/**",
+      "*.lock",
+      "*.min.js",
+      ".git/**",
+      ".env*"
+    ],
+    max_file_size_kb: 500,
+    auto_index: true,
+    max_files: 10000,
+    concurrency: 4
+  },
+  search: {
+    top_k: 10,
+    similarity_threshold: 0.01,
+    hybrid: {
+      enabled: true,
+      weight_vector: 0.4,
+      weight_bm25: 0.3,
+      weight_rrf: 0.3,
+      doc_penalty: 0.5,
+      identifier_boost: 1.5,
+      debug: false
+    }
+  },
+  storage: {
+    path: ".opencode/.beacon"
+  }
+};
+
 /**
  * Deep merge two objects recursively
  * @param target - Base configuration object
@@ -83,30 +147,11 @@ function deepMergeObjects(
 }
 
 /**
- * Load default configuration from package
+ * Load default configuration from embedded constant
  * @returns Default Beacon configuration
  */
 function loadDefaultConfig(): BeaconConfig {
-  // Get repo root first to build absolute path to config
-  const repoRoot = getRepoRoot();
-  const defaultConfigPath: string = join(
-    repoRoot,
-    "config",
-    "beacon.default.json"
-  );
-
-  if (!existsSync(defaultConfigPath)) {
-    throw new Error(`Default config not found at ${defaultConfigPath}`);
-  }
-
-  try {
-    const content: string = readFileSync(defaultConfigPath, "utf-8");
-    return JSON.parse(content) as BeaconConfig;
-  } catch (error) {
-    throw new Error(
-      `Failed to parse default config: ${error instanceof Error ? error.message : String(error)}`
-    );
-  }
+  return JSON.parse(JSON.stringify(DEFAULT_CONFIG));
 }
 
 /**

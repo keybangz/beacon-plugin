@@ -1,4 +1,5 @@
-import { HierarchicalNSW } from "hnswlib-node";
+import pkg from "hnswlib-node";
+const { HierarchicalNSW } = pkg;
 import { existsSync, mkdirSync, unlinkSync, readFileSync, writeFileSync } from "fs";
 import { join, dirname } from "path";
 import type { SearchResult } from "./types.js";
@@ -27,7 +28,7 @@ interface IndexEntry {
 }
 
 export class HNSWVectorIndex {
-  private index: HierarchicalNSW | null = null;
+  private index: any | null = null;
   private entries: Map<number, IndexEntry> = new Map();
   private idToInternal: Map<string, number> = new Map();
   private internalToId: Map<number, string> = new Map();
