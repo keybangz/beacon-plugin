@@ -3,17 +3,26 @@ import { existsSync } from "fs";
 import { dirname, join } from "path";
 import type { EmbedderResult } from "./types.js";
 import { BertTokenizer } from "./bert-tokenizer.js";
+import { CodeBertTokenizer } from "./code-tokenizer.js";
+
+export type ModelType = "bert" | "codebert" | "unixcoder" | "sentence-transformer";
 
 export interface ONNXEmbedderConfig {
   modelPath: string;
   dimensions: number;
   maxTokens: number;
   cacheSize?: number;
+  modelType?: ModelType;
+}
+
+interface Tokenizer {
+  encode(text: string, addSpecialTokens?: boolean): number[];
+  getPadTokenId(): number;
 }
 
 export class ONNXEmbedder {
   private session: InferenceSession | null = null;
-  private tokenizer: BertTokenizer | null = null;
+  private tokenizer: Tokenizer | null = null;
   private config: ONNXEmbedderConfig;
   private queryCache: Map<string, number[]>;
   private initialized: boolean = false;
@@ -43,7 +52,12 @@ export class ONNXEmbedder {
 
       const vocabPath = join(dirname(this.config.modelPath), "vocab.txt");
       if (existsSync(vocabPath)) {
-        this.tokenizer = new BertTokenizer(vocabPath);
+        const modelType = this.config.modelType ?? "bert";
+        if (modelType === "codebert" || modelType === "unixcoder") {
+          this.tokenizer = new CodeBertTokenizer(vocabPath);
+        } else {
+          this.tokenizer = new BertTokenizer(vocabPath);
+        }
       } else {
         return {
           ok: false,

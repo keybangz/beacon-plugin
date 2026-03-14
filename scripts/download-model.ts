@@ -8,21 +8,41 @@ import { mkdirSync, existsSync, writeFileSync } from "fs";
 import { join, dirname } from "path";
 import { homedir } from "os";
 
-const MODELS: Record<string, { url: string; dimensions: number; vocabUrl?: string }> = {
+const MODELS: Record<string, { 
+  url: string; 
+  dimensions: number; 
+  vocabUrl?: string;
+  type: "sentence-transformer" | "codebert" | "unixcoder";
+}> = {
   "all-MiniLM-L6-v2": {
     url: "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx",
     dimensions: 384,
     vocabUrl: "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/vocab.txt",
+    type: "sentence-transformer",
   },
   "all-MiniLM-L12-v2": {
     url: "https://huggingface.co/sentence-transformers/all-MiniLM-L12-v2/resolve/main/onnx/model.onnx",
     dimensions: 384,
     vocabUrl: "https://huggingface.co/sentence-transformers/all-MiniLM-L12-v2/resolve/main/vocab.txt",
+    type: "sentence-transformer",
   },
   "paraphrase-MiniLM-L6-v2": {
     url: "https://huggingface.co/sentence-transformers/paraphrase-MiniLM-L6-v2/resolve/main/onnx/model.onnx",
     dimensions: 384,
     vocabUrl: "https://huggingface.co/sentence-transformers/paraphrase-MiniLM-L6-v2/resolve/main/vocab.txt",
+    type: "sentence-transformer",
+  },
+  "codebert-base": {
+    url: "https://huggingface.co/microsoft/codebert-base/resolve/main/onnx/model.onnx",
+    dimensions: 768,
+    vocabUrl: "https://huggingface.co/microsoft/codebert-base/resolve/main/vocab.txt",
+    type: "codebert",
+  },
+  "unixcoder-base": {
+    url: "https://huggingface.co/microsoft/unixcoder-base/resolve/main/onnx/model.onnx",
+    dimensions: 768,
+    vocabUrl: "https://huggingface.co/microsoft/unixcoder-base/resolve/main/vocab.txt",
+    type: "unixcoder",
   },
 };
 
