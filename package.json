@@ -16,6 +16,7 @@
     "dist/",
     "command/",
     "config/",
+    "scripts/",
     "README.md",
     "LICENSE",
     "CHANGELOG.md"
@@ -33,11 +34,13 @@
   ],
   "scripts": {
     "clean": "rm -rf dist",
-    "build": "npm run clean && tsc",
+    "build": "npm run clean && tsc && cp -r config command scripts dist/",
     "dev": "npm run clean && tsc --watch",
     "test": "vitest",
     "type-check": "tsc --noEmit",
-    "prepublishOnly": "npm run build"
+    "setup": "node scripts/setup.cjs",
+    "prepublishOnly": "npm run build",
+    "postinstall": "npm run setup"
   },
   "dependencies": {
     "chokidar": "^5.0.0",

@@ -1,0 +1,166 @@
+name: Development Workflow
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  # Job 1: Automated dependency checks
+  dependencies:
+    runs-on: ubuntu-latest
+    outputs:
+      needs-update: ${{ steps.check.outputs.needs-update }}
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Use Node.js 20.x
+      uses: actions/setup-node@v4
+      with:
+        node-version: 20.x
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Check for outdated dependencies
+      id: check
+      run: |
+        OUTDATED=$(npm outdated --json 2>/dev/null || echo '{}')
+        if [ -n "$OUTDATED" ] && [ "$OUTDATED" != "{}" ]; then
+          echo "needs-update=true" >> $GITHUB_OUTPUT
+          echo "::notice::Outdated dependencies detected:"
+          echo "$OUTDATED" | jq -r '.[] | "- \(.name): \(.current) -> \(.latest) (\(.wanted))"'
+        else
+          echo "needs-update=false" >> $GITHUB_OUTPUT
+        fi
+
+  # Job 2: Build and type check
+  build:
+    needs: dependencies
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Use Node.js 20.x
+      uses: actions/setup-node@v4
+      with:
+        node-version: 20.x
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Run type check
+      run: npm run type-check
+    
+    - name: Build project
+      run: npm run build
+    
+    - name: Verify dist structure
+      run: |
+        echo "Checking distribution directory structure..."
+        ls -la dist/
+        
+        # Check critical files exist
+        test -f dist/beacon.js || exit 1
+        test -f dist/beacon.js.map || exit 1
+        
+        # Check config directory
+        test -d dist/config/ || exit 1
+        test -f dist/config/beacon.default.json || exit 1
+        
+        # Check command directory
+        test -d dist/command/ || exit 1
+        ls dist/command/*.md | wc -l | grep -q 11 || exit 1
+        
+        # Check scripts directory
+        test -d dist/scripts/ || exit 1
+        test -f dist/scripts/setup.cjs || exit 1
+        
+        echo "✅ All critical files present!"
+
+  # Job 3: Run tests
+  test:
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [18.x, 20.x, 22.x]
+
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Use Node.js ${{ matrix.node-version }}
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ matrix.node-version }}
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Run tests
+      run: npm test
+
+  # Job 4: Security scan (only on main branch)
+  security:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Use Node.js 20.x
+      uses: actions/setup-node@v4
+      with:
+        node-version: 20.x
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Run npm audit
+      run: npm audit --audit-level=moderate
+      continue-on-error: true
+    
+    - name: CodeQL Security Analysis
+      uses: github/codeql-action/init@v3
+      with:
+        languages: ${{ matrix.language }}
+    
+    - name: Perform security analysis
+      uses: github/codeql-action/perform-analysis@v3
+      with:
+        category: security
+
+  # Job 5: Dependency update check (only for PRs)
+  check-dependencies:
+    needs: dependencies
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Use Node.js 20.x
+      uses: actions/setup-node@v4
+      with:
+        node-version: 20.x
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Check if PR needs dependency updates
+      if: needs.dependencies.outputs.needs-update == 'true'
+      run: |
+        echo "::notice::This repository has outdated dependencies. Consider updating them."
+        echo "::notice::You can run Dependabot manually or wait for the weekly update."
+    
+    - name: Show outdated dependencies
+      run: |
+        npm outdated --json | jq -r '.[] | "- \(.name): \(.current) -> \(.latest)"' 2>/dev/null || echo "No significant updates available"

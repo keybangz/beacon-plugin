@@ -1,4 +1,6 @@
 import type { Plugin } from "@opencode-ai/plugin";
+import * as fs from 'fs';
+import * as path from 'path';
 import SearchTool from "./src/tools/search.js";
 import IndexTool from "./src/tools/index.js";
 import ReindexTool from "./src/tools/reindex.js";
@@ -15,6 +17,130 @@ import { getOrCreateWatcher } from "./src/lib/watcher.js";
 import type { FileWatcher } from "./src/lib/watcher.js";
 import { getCoordinator, releaseCoordinator } from "./src/lib/pool.js";
 import type { IndexProgress } from "./src/lib/sync.js";
+
+const isNode = typeof process !== 'undefined' && process.versions?.node;
+
+function getConfigPath(worktree: string): string {
+  if (isNode) {
+    return path.join(worktree, '.opencode', 'beacon.json');
+  }
+  return '';
+}
+
+function ensureUserConfig(worktree: string): { config: any | null; created: boolean } {
+  if (!isNode) return { config: null, created: false };
+  
+  const configPath = getConfigPath(worktree);
+  const configDir = path.dirname(configPath);
+  
+  // Read default config from dist
+  let defaultConfig: any = null;
+  try {
+    const defaultConfigPath = path.join(__dirname, 'config', 'beacon.default.json');
+    if (fs.existsSync(defaultConfigPath)) {
+      defaultConfig = JSON.parse(fs.readFileSync(defaultConfigPath, 'utf8'));
+    }
+  } catch (err) {
+    console.warn(`[Beacon] Failed to load default config: ${err}`);
+  }
+  
+  if (!defaultConfig) {
+    // Fallback to hardcoded default
+    defaultConfig = {
+      embedding: {
+        api_base: "local",
+        model: "all-MiniLM-L6-v2",
+        dimensions: 384,
+        batch_size: 32,
+        context_limit: 256,
+        query_prefix: "",
+        api_key_env: "",
+        enabled: true
+      },
+      chunking: {
+        strategy: "hybrid",
+        max_tokens: 512,
+        overlap_tokens: 32
+      },
+      indexing: {
+        include: [
+          "**/*.ts",
+          "**/*.tsx",
+          "**/*.js",
+          "**/*.jsx",
+          "**/*.py",
+          "**/*.go",
+          "**/*.rs",
+          "**/*.java",
+          "**/*.rb",
+          "**/*.php",
+          "**/*.sql",
+          "**/*.md"
+        ],
+        exclude: [
+          "node_modules/**",
+          "dist/**",
+          "build/**",
+          ".next/**",
+          "*.lock",
+          "*.min.js",
+          ".git/**",
+          ".env*"
+        ],
+        max_file_size_kb: 500,
+        auto_index: true,
+        max_files: 10000,
+        concurrency: 4
+      },
+      search: {
+        top_k: 10,
+        similarity_threshold: 0.35,
+        hybrid: {
+          enabled: true,
+          weight_vector: 0.4,
+          weight_bm25: 0.3,
+          weight_rrf: 0.3,
+          doc_penalty: 0.5,
+          identifier_boost: 1.5,
+          debug: false
+        }
+      },
+      storage: {
+        path: ".opencode/.beacon"
+      }
+    };
+  }
+  
+  if (fs.existsSync(configPath)) {
+    try {
+      const content = fs.readFileSync(configPath, 'utf8');
+      return { config: JSON.parse(content), created: false };
+    } catch {
+      return { config: null, created: false };
+    }
+  }
+  
+  try {
+    if (!fs.existsSync(configDir)) {
+      fs.mkdirSync(configDir, { recursive: true });
+    }
+    
+    fs.writeFileSync(configPath, JSON.stringify(defaultConfig, null, 2));
+    console.log(`[Beacon] Created default config at ${configPath}`);
+    
+    // Also create .beacon storage directory
+    const beaconStorageDir = path.join(configDir, '.beacon');
+    if (!fs.existsSync(beaconStorageDir)) {
+      fs.mkdirSync(beaconStorageDir, { recursive: true });
+      console.log(`[Beacon] Created storage directory at ${beaconStorageDir}`);
+    }
+    
+    return { config: defaultConfig, created: true };
+  } catch (err) {
+    console.warn(`[Beacon] Failed to create config: ${err}`);
+    return { config: null, created: false };
+  }
+}
 
 function extractFilePath(args: any, toolName: string): string | null {
   if (!args) return null;
@@ -181,60 +307,72 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
     if (!isInitialized || !config) return;
     if (!config.indexing.auto_index) return;
 
-    const pooled = await getCoordinator(worktree);
-    const stats = pooled.db.getStats();
+    let pooled;
+    try {
+      pooled = await getCoordinator(worktree);
+      const stats = pooled.db.getStats();
 
-    if (stats.total_chunks > 0) {
-      await releaseCoordinator(worktree);
-      return;
-    }
+      if (stats.total_chunks > 0) {
+        await releaseCoordinator(worktree);
+        return;
+      }
 
-    const lastMilestone = { percent: 0, phase: "" };
+      const lastMilestone = { percent: 0, phase: "" };
 
-    if (sessionID) {
-      await pooled.coordinator.performFullIndex(async (progress) => {
-        if (shouldShowProgress(progress, lastMilestone)) {
-          lastMilestone.percent = progress.percent;
-          lastMilestone.phase = progress.phase;
-          if (progress.phase !== "complete" && progress.phase !== "error") {
-            await client.session.prompt({
-              path: { id: sessionID },
-              body: {
-                noReply: true,
-                parts: [
-                  {
-                    type: "text",
-                    text: formatProgressMessage(progress),
-                    synthetic: true,
-                    ignored: true,
-                  },
-                ],
-              },
-            });
+      if (sessionID) {
+        await pooled.coordinator.performFullIndex(async (progress) => {
+          if (shouldShowProgress(progress, lastMilestone)) {
+            lastMilestone.percent = progress.percent;
+            lastMilestone.phase = progress.phase;
+            if (progress.phase !== "complete" && progress.phase !== "error") {
+              await client.session.prompt({
+                path: { id: sessionID },
+                body: {
+                  noReply: true,
+                  parts: [
+                    {
+                      type: "text",
+                      text: formatProgressMessage(progress),
+                      synthetic: true,
+                      ignored: true,
+                    },
+                  ],
+                },
+              });
+            }
           }
+        });
+
+        await client.session.prompt({
+          path: { id: sessionID },
+          body: {
+            noReply: true,
+            parts: [
+              {
+                type: "text",
+                text: "✅ **Beacon Indexing Complete**\nYour codebase is now indexed and ready for semantic search.",
+                synthetic: true,
+                ignored: true,
+              },
+            ],
+          },
+        });
+      } else {
+        // Silent indexing for plugin init
+        await pooled.coordinator.performFullIndex();
+      }
+    } catch (error) {
+      console.error(`[Beacon] Auto-indexing error:`, error);
+      throw error; // Re-throw so callers can handle it
+    } finally {
+      if (pooled) {
+        try {
+          await releaseCoordinator(worktree);
+        } catch (releaseError) {
+          console.error(`[Beacon] Failed to release coordinator:`, releaseError);
         }
-      });
-
-      await client.session.prompt({
-        path: { id: sessionID },
-        body: {
-          noReply: true,
-          parts: [
-            {
-              type: "text",
-              text: "✅ **Beacon Indexing Complete**\nYour codebase is now indexed and ready for semantic search.",
-              synthetic: true,
-              ignored: true,
-            },
-          ],
-        },
-      });
-    } else {
-      // Silent indexing for plugin init
-      await pooled.coordinator.performFullIndex();
+      }
     }
-
-    await releaseCoordinator(worktree);
   }
 
   async function initializePlugin(): Promise<boolean> {
@@ -246,6 +384,9 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
         release();
         return true;
       }
+
+      // Ensure config exists before trying to load it
+      ensureUserConfig(worktree);
 
       const detectedRoot = findRepoRoot(worktree);
       if (!detectedRoot) {
@@ -371,21 +512,31 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
           }
         } else {
           // Check if indexing is needed and show status
-          const pooled = await getCoordinator(worktree);
-          const stats = pooled.db.getStats();
+          let pooled;
+          try {
+            pooled = await getCoordinator(worktree);
+            const stats = pooled.db.getStats();
 
-          if (stats.total_chunks === 0 && config?.indexing.auto_index) {
-            await releaseCoordinator(worktree);
-            try {
-              await performAutoIndex(sessionID);
-            } catch (error) {
-              console.error(
-                `[Beacon] Auto-indexing failed in session.created:`,
-                error,
-              );
+            if (stats.total_chunks === 0 && config?.indexing.auto_index) {
+              await releaseCoordinator(worktree);
+              pooled = null; // Mark as released
+              try {
+                await performAutoIndex(sessionID);
+              } catch (error) {
+                console.error(
+                  `[Beacon] Auto-indexing failed in session.created:`,
+                  error,
+                );
+              }
             }
-          } else {
-            await releaseCoordinator(worktree);
+          } finally {
+            if (pooled) {
+              try {
+                await releaseCoordinator(worktree);
+              } catch (releaseError) {
+                console.error(`[Beacon] Failed to release coordinator:`, releaseError);
+              }
+            }
           }
         }
       }
@@ -461,7 +612,11 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
             if (success) {
               // Immediately perform auto-indexing for the newly detected repo
               if (config?.indexing.auto_index) {
-                await performAutoIndex();
+                try {
+                  await performAutoIndex();
+                } catch (error) {
+                  console.error(`[Beacon] Auto-indexing failed after git init:`, error);
+                }
               }
               break;
             }

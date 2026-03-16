@@ -1,0 +1,67 @@
+# To get started with Dependabot version updates, you'll need to specify which
+# package ecosystems to update and where the package manifests are located.
+# Please see the documentation for all configuration options:
+# https://docs.github.com/github/administering-a-repository/configuration-options-for-dependency-updates
+
+version: 2
+updates:
+  # Maintain dependencies for npm
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "America/New_York"
+    open-pull-requests-limit: 10
+    versioning-strategy: "increase"
+    labels:
+      - "dependencies"
+      - "npm"
+    commit-message:
+      prefix: "chore"
+      prefix-development: "chore"
+      include: "scope"
+    groups:
+      production-dependencies:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+      dev-dependencies:
+        dependency-type: "development"
+        update-types:
+          - "minor"
+          - "patch"
+      major-updates:
+        update-types:
+          - "major"
+        patterns:
+          - "*"
+    
+    # Ignore major version updates for critical dependencies
+    ignore:
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "hnswlib-node"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "onnxruntime-node"
+        update-types: ["version-update:semver-major"]
+    
+    # Allow automerging for minor/patch updates that pass CI
+    automerged_updates:
+      - match:
+          dependency_type: "production"
+          update_type: "semver:minor"
+      - match:
+          dependency_type: "development"
+          update_type: "semver:minor"
+      - match:
+          dependency_type: "production"
+          update_type: "semver:patch"
+      - match:
+          dependency_type: "development"
+          update_type: "semver:patch"
