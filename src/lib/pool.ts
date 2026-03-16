@@ -20,12 +20,39 @@ interface PoolEntry {
   acquiring: Promise<void>;
 }
 
+class AsyncMutex {
+  private queue: Array<() => void> = [];
+  private locked = false;
+
+  async acquire(): Promise<() => void> {
+    return new Promise((resolve) => {
+      if (!this.locked) {
+        this.locked = true;
+        resolve(() => this.release());
+      } else {
+        this.queue.push(() => {
+          this.locked = true;
+          resolve(() => this.release());
+        });
+      }
+    });
+  }
+
+  private release(): void {
+    const next = this.queue.shift();
+    if (next) {
+      next();
+    } else {
+      this.locked = false;
+    }
+  }
+}
+
 class ConnectionPool {
   private pools: Map<string, PoolEntry> = new Map();
   private cleanupInterval: ReturnType<typeof setInterval> | null = null;
   private readonly IDLE_TIMEOUT_MS = 60000;
-  private globalLock: Promise<void> = Promise.resolve();
-  private resolveGlobalLock: (() => void) | null = null;
+  private globalLock = new AsyncMutex();
 
   constructor() {
     this.startCleanupTimer();
@@ -41,32 +68,7 @@ class ConnectionPool {
   }
 
   private async getGlobalLock(): Promise<() => void> {
-    let myResolve: (() => void) | null = null;
-    
-    while (true) {
-      if (this.resolveGlobalLock === null) {
-        const currentLock = this.globalLock;
-        let nextPromiseResolve: (() => void) | null = null;
-        
-        myResolve = () => {
-          this.resolveGlobalLock = null;
-          this.globalLock = Promise.resolve();
-          if (nextPromiseResolve) {
-            nextPromiseResolve();
-          }
-        };
-        
-        this.resolveGlobalLock = myResolve;
-        this.globalLock = new Promise((resolve) => {
-          nextPromiseResolve = resolve;
-        });
-        
-        await currentLock;
-        return myResolve;
-      }
-      
-      await this.globalLock;
-    }
+    return this.globalLock.acquire();
   }
 
   private async cleanupIdle(): Promise<void> {
@@ -226,7 +228,9 @@ class ConnectionPool {
         await entry.acquiring;
         try {
           entry.resources.db.close();
-        } catch {}
+        } catch (error) {
+          console.error(`[Beacon] Failed to close database in closeAll:`, error);
+        }
       }
       
       this.pools.clear();

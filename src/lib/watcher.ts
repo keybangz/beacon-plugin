@@ -119,7 +119,11 @@ export class FileWatcher extends EventEmitter {
     }
 
     return new Promise((resolve) => {
-      this.watcher!.on("ready", () => resolve());
+      const readyHandler = () => {
+        this.watcher?.off("ready", readyHandler);
+        resolve();
+      };
+      this.watcher!.on("ready", readyHandler);
     });
   }
 }

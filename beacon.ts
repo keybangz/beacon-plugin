@@ -106,12 +106,41 @@ function shouldShowProgress(
   return false;
 }
 
+class InitMutex {
+  private locked = false;
+  private queue: Array<() => void> = [];
+
+  async acquire(): Promise<() => void> {
+    return new Promise((resolve) => {
+      if (!this.locked) {
+        this.locked = true;
+        resolve(() => this.release());
+      } else {
+        this.queue.push(() => {
+          this.locked = true;
+          resolve(() => this.release());
+        });
+      }
+    });
+  }
+
+  private release(): void {
+    const next = this.queue.shift();
+    if (next) {
+      next();
+    } else {
+      this.locked = false;
+    }
+  }
+}
+
 export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
   let repoRoot: string | null = null;
   let config: ReturnType<typeof loadConfig> | null = null;
   let fileWatcher: FileWatcher | null = null;
   let isInitialized = false;
   let hasAttemptedAutoIndex = false;
+  const initMutex = new InitMutex();
 
   function isGitInitCommand(command: string): boolean {
     return command.includes("git init") && !command.includes("git reinit");
@@ -208,10 +237,19 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
   async function initializePlugin(): Promise<boolean> {
     if (isInitialized) return true;
 
-    const detectedRoot = findRepoRoot(worktree);
-    if (!detectedRoot) return false;
-
+    const release = await initMutex.acquire();
     try {
+      if (isInitialized) {
+        release();
+        return true;
+      }
+
+      const detectedRoot = findRepoRoot(worktree);
+      if (!detectedRoot) {
+        release();
+        return false;
+      }
+
       repoRoot = detectedRoot;
       config = loadConfig(repoRoot);
       fileWatcher = (await getOrCreateWatcher(repoRoot, config)) as FileWatcher;
@@ -291,6 +329,8 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
     } catch (error) {
       console.error(`[Beacon] Plugin initialization error:`, error);
       return false;
+    } finally {
+      release();
     }
   }
 
@@ -426,7 +466,9 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
             if (pooled) {
               try {
                 await releaseCoordinator(worktree);
-              } catch {}
+              } catch (releaseError) {
+                console.error(`[Beacon] Failed to release coordinator for ${filePath}:`, releaseError);
+              }
             }
           }
         }
@@ -447,7 +489,9 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
             if (pooled) {
               try {
                 await releaseCoordinator(worktree);
-              } catch {}
+              } catch (releaseError) {
+                console.error(`[Beacon] Failed to release coordinator:`, releaseError);
+              }
             }
           }
         }
