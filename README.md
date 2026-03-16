@@ -73,15 +73,17 @@ ollama pull all-minilm:22m
 
 ### Search Your Code
 
-```
 # Initialize index
+```
 reindex
+```
 
 # Search semantically (replaces grep)
+```
 search "authentication flow"
 search "database connection logic"
 search "error handling in API"
-
+```
 
 
 ## Tools
