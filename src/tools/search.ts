@@ -78,60 +78,64 @@ export default tool({
         const storagePath = join(repoRoot, config.storage.path);
         const embedder = new Embedder(config.embedding, effectiveContextLimit, storagePath);
         
-        let results;
         try {
-          const queryWithPrefix = (config.embedding.query_prefix || "") + args.query;
-          const queryEmbedding = await embedder.embedQuery(queryWithPrefix);
-          
-          results = db.search(
-            queryEmbedding,
-            args.topK ?? config.search.top_k ?? 10,
-            args.threshold ?? config.search.similarity_threshold ?? 0.01,
-            args.query,
-            config,
-            args.pathPrefix,
-            args.noHybrid
-          );
-        } catch (embedError: unknown) {
-          const embedErrorMsg = embedError instanceof Error ? embedError.message : String(embedError);
-          
-          let ftsResults;
+          let results;
           try {
-            ftsResults = db.ftsOnlySearch(
+            const queryWithPrefix = (config.embedding.query_prefix || "") + args.query;
+            const queryEmbedding = await embedder.embedQuery(queryWithPrefix);
+            
+            results = db.search(
+              queryEmbedding,
+              args.topK ?? config.search.top_k ?? 10,
+              args.threshold ?? config.search.similarity_threshold ?? 0.01,
               args.query,
-              args.topK ?? 10,
-              args.pathPrefix
+              config,
+              args.pathPrefix,
+              args.noHybrid
             );
-          } catch (ftsError: unknown) {
-            const ftsErrorMsg = ftsError instanceof Error ? ftsError.message : String(ftsError);
+          } catch (embedError: unknown) {
+            const embedErrorMsg = embedError instanceof Error ? embedError.message : String(embedError);
+            
+            let ftsResults;
+            try {
+              ftsResults = db.ftsOnlySearch(
+                args.query,
+                args.topK ?? 10,
+                args.pathPrefix
+              );
+            } catch (ftsError: unknown) {
+              const ftsErrorMsg = ftsError instanceof Error ? ftsError.message : String(ftsError);
+              return JSON.stringify({
+                error: `Search failed: embedding unavailable (${embedErrorMsg}) and keyword search failed (${ftsErrorMsg})`,
+                matches: [],
+              });
+            }
+            
             return JSON.stringify({
-              error: `Search failed: embedding unavailable (${embedErrorMsg}) and keyword search failed (${ftsErrorMsg})`,
-              matches: [],
+              warning: `Embedding server unavailable (${embedErrorMsg}), using keyword search`,
+              matches: ftsResults.map((r) => ({
+                file: r.filePath,
+                lines: `${r.startLine}-${r.endLine}`,
+                similarity: r.similarity.toFixed(3),
+                preview: truncateToTokenLimit(r.chunkText, 150),
+                _note: r._note,
+              })),
             });
           }
-          
+
           return JSON.stringify({
-            warning: `Embedding server unavailable (${embedErrorMsg}), using keyword search`,
-            matches: ftsResults.map((r) => ({
+            query: args.query,
+            mode: "hybrid",
+            matches: results.map((r) => ({
               file: r.filePath,
               lines: `${r.startLine}-${r.endLine}`,
               similarity: r.similarity.toFixed(3),
               preview: truncateToTokenLimit(r.chunkText, 150),
-              _note: r._note,
             })),
           });
+        } finally {
+          await embedder.close();
         }
-
-        return JSON.stringify({
-          query: args.query,
-          mode: "hybrid",
-          matches: results.map((r) => ({
-            file: r.filePath,
-            lines: `${r.startLine}-${r.endLine}`,
-            similarity: r.similarity.toFixed(3),
-            preview: truncateToTokenLimit(r.chunkText, 150),
-          })),
-        });
       } finally {
         db.close();
       }

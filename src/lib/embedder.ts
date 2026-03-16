@@ -3,6 +3,7 @@ import { ONNXEmbedder, type ONNXEmbedderConfig } from "./onnx-embedder.js";
 import { join } from "path";
 import { existsSync, mkdirSync } from "fs";
 import { homedir } from "os";
+import { simpleHash } from "./hash.js";
 
 class QueryEmbeddingCache {
   private cache = new Map<string, number[]>();
@@ -34,14 +35,6 @@ class QueryEmbeddingCache {
   clear(): void {
     this.cache.clear();
   }
-}
-
-function simpleHash(str: string): number {
-  let hash = 5381;
-  for (let i = 0; i < str.length; i++) {
-    hash = ((hash << 5) + hash) ^ str.charCodeAt(i);
-  }
-  return hash >>> 0;
 }
 
 export type EmbedderMode = "api" | "onnx" | "disabled";
@@ -493,5 +486,13 @@ export class Embedder {
     }
     
     return Array.from(embedding);
+  }
+
+  async close(): Promise<void> {
+    if (this.mode === "onnx" && this.onnxEmbedder) {
+      await this.onnxEmbedder.close();
+    }
+    this.queryCache.clear();
+    this.pendingRequests.clear();
   }
 }

@@ -7,6 +7,7 @@ import { Embedder } from "./embedder.js";
 import { getRepoFiles, getModifiedFilesSince, getFileHash } from "./git.js";
 import { shouldIndex } from "./ignore.js";
 import { BeaconDatabase } from "./db.js";
+import { simpleHash } from "./hash.js";
 
 const YIELD_INTERVAL = 50;
 const FILE_BATCH_SIZE = 100;
@@ -46,14 +47,6 @@ export function isIndexerRunning(db?: BeaconDatabase): boolean {
 export function shouldTerminate(db: BeaconDatabase): boolean {
   const status = db.getSyncState("sync_status");
   return status === "terminating";
-}
-
-function simpleHash(str: string): number {
-  let hash = 5381;
-  for (let i = 0; i < str.length; i++) {
-    hash = ((hash << 5) + hash) ^ str.charCodeAt(i);
-  }
-  return hash >>> 0;
 }
 
 export class IndexCoordinator {

@@ -1,3 +1,5 @@
+import { simpleHash } from "./hash.js";
+
 const IDENTIFIER_PATTERNS = [
   /\b(?:function|class|const|let|var|async|static)\s+([a-zA-Z_$][a-zA-Z0-9_$]*)/g,
   /import\s+(?:\{[^}]*\}|\*\s+as\s+[a-zA-Z_$][a-zA-Z0-9_$]*|[a-zA-Z_$][a-zA-Z0-9_$]*)/g,
@@ -44,15 +46,10 @@ function generateCacheKey(code: string): string {
   }
   
   const hash = simpleHash(code);
-  return `${code.length}:${hash}:${code.slice(0, 50)}:${code.slice(-50)}`;
-}
-
-function simpleHash(str: string): number {
-  let hash = 5381;
-  for (let i = 0; i < str.length; i++) {
-    hash = ((hash << 5) + hash) + str.charCodeAt(i);
-  }
-  return hash >>> 0;
+  const midPoint = Math.floor(code.length / 2);
+  const midStart = Math.max(0, midPoint - 25);
+  const midEnd = Math.min(code.length, midPoint + 25);
+  return `${code.length}:${hash}:${code.slice(0, 30)}:${code.slice(midStart, midEnd)}:${code.slice(-30)}`;
 }
 
 export function extractIdentifiers(code: string): Set<string> {

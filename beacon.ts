@@ -309,7 +309,11 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
 
         if (!hasAttemptedAutoIndex) {
           hasAttemptedAutoIndex = true;
-          await performAutoIndex(sessionID);
+          try {
+            await performAutoIndex(sessionID);
+          } catch (error) {
+            console.error(`[Beacon] Auto-indexing failed in session.created:`, error);
+          }
         } else {
           // Check if indexing is needed and show status
           const pooled = await getCoordinator(worktree);
@@ -317,7 +321,11 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
           
           if (stats.total_chunks === 0 && config?.indexing.auto_index) {
             await releaseCoordinator(worktree);
-            await performAutoIndex(sessionID);
+            try {
+              await performAutoIndex(sessionID);
+            } catch (error) {
+              console.error(`[Beacon] Auto-indexing failed in session.created:`, error);
+            }
           } else {
             await releaseCoordinator(worktree);
           }

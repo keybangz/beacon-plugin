@@ -238,20 +238,29 @@ export class HNSWVectorIndex {
 
   search(queryEmbedding: number[], topK: number): SearchResult[] {
     if (!this.index) {
-      this.initialize();
+      try {
+        this.initialize();
+      } catch (error) {
+        console.error(`[Beacon] HNSW initialization failed during search:`, error);
+        return [];
+      }
     }
 
-    const numElements = this.index!.getMaxElements();
+    if (!this.index) {
+      return [];
+    }
+
+    const numElements = this.index.getMaxElements();
     if (numElements === 0) {
       return [];
     }
 
-    const effectiveK = Math.min(topK, this.index!.getCurrentCount());
+    const effectiveK = Math.min(topK, this.index.getCurrentCount());
     if (effectiveK === 0) {
       return [];
     }
 
-    const results = this.index!.searchKnn(queryEmbedding, effectiveK);
+    const results = this.index.searchKnn(queryEmbedding, effectiveK);
 
     const searchResults: SearchResult[] = [];
     for (let i = 0; i < results.neighbors.length; i++) {

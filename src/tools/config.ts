@@ -101,8 +101,16 @@ export default tool({
           parsedValue = true;
         } else if (args.value === "false") {
           parsedValue = false;
-        } else if (!isNaN(Number(args.value))) {
+        } else if (args.value === "null") {
+          parsedValue = null;
+        } else if (!isNaN(Number(args.value)) && isFinite(Number(args.value))) {
           parsedValue = Number(args.value);
+        } else if (args.value.startsWith("[") || args.value.startsWith("{")) {
+          try {
+            parsedValue = JSON.parse(args.value);
+          } catch {
+            // Keep as string if JSON parse fails
+          }
         }
 
         // Set the value

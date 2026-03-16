@@ -71,16 +71,28 @@ class ConnectionPool {
 
   private async cleanupIdle(): Promise<void> {
     const now = Date.now();
-    const release = await this.getGlobalLock();
     
-    try {
-      const entries = Array.from(this.pools.entries());
+    // Get snapshot of pool keys while holding lock
+    const release = await this.getGlobalLock();
+    const repoRoots = Array.from(this.pools.keys());
+    release();
+    
+    // Check each entry without holding global lock
+    for (const repoRoot of repoRoots) {
+      const entry = this.pools.get(repoRoot);
+      if (!entry) continue;
       
-      for (const [repoRoot, entry] of entries) {
-        // Wait for entry to be available
-        await entry.acquiring;
+      // Wait for entry to be available (without global lock to prevent deadlock)
+      await entry.acquiring;
+      
+      // Re-acquire lock to check and potentially cleanup
+      const release2 = await this.getGlobalLock();
+      try {
+        // Re-check entry still exists and is idle
+        const currentEntry = this.pools.get(repoRoot);
+        if (!currentEntry) continue;
         
-        const resources = entry.resources;
+        const resources = currentEntry.resources;
         if (
           resources.refCount === 0 &&
           now - resources.lastAccessed > this.IDLE_TIMEOUT_MS
@@ -89,12 +101,12 @@ class ConnectionPool {
             resources.db.close();
             this.pools.delete(repoRoot);
           } catch (error) {
-            // Silently handle cleanup errors
+            console.error(`[Beacon] Failed to cleanup pool entry for ${repoRoot}:`, error);
           }
         }
+      } finally {
+        release2();
       }
-    } finally {
-      release();
     }
   }
 

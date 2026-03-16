@@ -27,6 +27,12 @@ export function getRepoFiles(repoRoot: string): string[] {
     repoFilesCache.set(repoRoot, { files, timestamp: Date.now() });
     return files;
   } catch (error: unknown) {
+    // If we have stale cached data, return it as fallback
+    if (cached) {
+      console.error(`[Beacon] Git command failed, using stale cache:`, error instanceof Error ? error.message : String(error));
+      return cached.files;
+    }
+    
     throw new Error(
       `Failed to get repo files: ${error instanceof Error ? error.message : String(error)}`
     );
