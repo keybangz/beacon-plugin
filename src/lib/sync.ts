@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, statSync } from "fs";
+import { existsSync, mkdirSync } from "fs";
+import { stat as statAsync, readFile as readFileAsync } from "fs/promises";
 import { join } from "path";
 import type { BeaconConfig } from "./types.js";
 import { chunkCode } from "./chunker.js";
@@ -6,6 +7,22 @@ import { Embedder } from "./embedder.js";
 import { getRepoFiles, getModifiedFilesSince, getFileHash } from "./git.js";
 import { shouldIndex } from "./ignore.js";
 import { BeaconDatabase } from "./db.js";
+
+const YIELD_INTERVAL = 50;
+const FILE_BATCH_SIZE = 100;
+const EMBEDDING_BATCH_MEMORY_LIMIT = 5000;
+
+export interface IndexProgress {
+  phase: "discovering" | "chunking" | "embedding" | "storing" | "complete" | "error";
+  filesTotal: number;
+  filesProcessed: number;
+  chunksTotal: number;
+  chunksProcessed: number;
+  percent: number;
+  message: string;
+}
+
+export type ProgressCallback = (progress: IndexProgress) => void | Promise<void>;
 
 export function terminateIndexer(db?: BeaconDatabase): boolean {
   if (db) {
@@ -45,6 +62,7 @@ export class IndexCoordinator {
   private embedder: Embedder;
   private repoRoot: string;
   private useEmbeddings: boolean;
+  private progressCallback: ProgressCallback | null = null;
 
   constructor(
     config: BeaconConfig,
@@ -59,11 +77,35 @@ export class IndexCoordinator {
     this.useEmbeddings = config.embedding.enabled !== false;
   }
 
-  async performFullIndex(): Promise<{ success: boolean; filesIndexed: number }> {
+  setProgressCallback(callback: ProgressCallback | null): void {
+    this.progressCallback = callback;
+  }
+
+  private async emitProgress(progress: IndexProgress): Promise<void> {
+    if (this.progressCallback) {
+      await this.progressCallback(progress);
+    }
+  }
+
+  async performFullIndex(onProgress?: ProgressCallback): Promise<{ success: boolean; filesIndexed: number }> {
+    if (onProgress) {
+      this.setProgressCallback(onProgress);
+    }
+
     this.db.setSyncState("sync_status", "in_progress");
     this.db.setSyncState("sync_started_at", new Date().toISOString());
 
     try {
+      await this.emitProgress({
+        phase: "discovering",
+        filesTotal: 0,
+        filesProcessed: 0,
+        chunksTotal: 0,
+        chunksProcessed: 0,
+        percent: 0,
+        message: "Discovering files...",
+      });
+
       this.db.clear();
 
       const allFiles = getRepoFiles(this.repoRoot);
@@ -78,10 +120,30 @@ export class IndexCoordinator {
       this.db.setSyncState("total_files", String(filesToIndex.length));
       this.db.setSyncState("files_indexed", "0");
 
-      const filesIndexed = await this.indexFiles(filesToIndex);
+      await this.emitProgress({
+        phase: "discovering",
+        filesTotal: filesToIndex.length,
+        filesProcessed: 0,
+        chunksTotal: 0,
+        chunksProcessed: 0,
+        percent: 0,
+        message: `Found ${filesToIndex.length} files to index`,
+      });
+
+      const filesIndexed = await this.indexFiles(filesToIndex, onProgress);
 
       this.db.setSyncState("last_full_sync", new Date().toISOString());
       this.db.setSyncState("sync_status", "idle");
+
+      await this.emitProgress({
+        phase: "complete",
+        filesTotal: filesToIndex.length,
+        filesProcessed: filesIndexed,
+        chunksTotal: 0,
+        chunksProcessed: 0,
+        percent: 100,
+        message: `Indexing complete: ${filesIndexed} files indexed`,
+      });
 
       return { success: true, filesIndexed };
     } catch (error: unknown) {
@@ -99,6 +161,17 @@ export class IndexCoordinator {
         `Full index failed: ${errorMsg}`
       );
       this.db.setSyncState("sync_status", "error");
+
+      await this.emitProgress({
+        phase: "error",
+        filesTotal: 0,
+        filesProcessed: 0,
+        chunksTotal: 0,
+        chunksProcessed: 0,
+        percent: 0,
+        message: `Indexing failed: ${errorMsg}`,
+      });
+
       throw error;
     }
   }
@@ -133,7 +206,7 @@ export class IndexCoordinator {
       this.db.setSyncState("files_indexed", "0");
 
       for (const file of filesToIndex) {
-        this.db.deleteChunks(file);
+        await this.db.deleteChunks(file);
       }
 
       const filesIndexed = await this.indexFiles(filesToIndex);
@@ -143,7 +216,7 @@ export class IndexCoordinator {
 
       for (const indexedFile of indexedFiles) {
         if (!allTrackedFiles.includes(indexedFile)) {
-          this.db.deleteChunks(indexedFile);
+          await this.db.deleteChunks(indexedFile);
         }
       }
 
@@ -160,77 +233,81 @@ export class IndexCoordinator {
     }
   }
 
-  private async indexFiles(filePaths: string[]): Promise<number> {
-    const filesToProcess: Array<{
-      path: string;
-      content: string;
-      hash: string;
-    }> = [];
-
-    for (const filePath of filePaths) {
-      if (shouldTerminate(this.db)) {
-        throw Object.assign(new Error("Indexing terminated by user"), { name: "AbortError" });
-      }
-
-      try {
-        const fullPath = join(this.repoRoot, filePath);
-
-        const stat = statSync(fullPath);
-        if (stat.size / 1024 > this.config.indexing.max_file_size_kb) {
-          continue;
-        }
-
-        const content = readFileSync(fullPath, "utf-8");
-        const hash = getFileHash(content);
-
-        const storedHash = this.db.getFileHash(filePath);
-        if (storedHash === hash) {
-          continue;
-        }
-
-        filesToProcess.push({ path: filePath, content, hash });
-      } catch {
-      }
+  private async indexFiles(filePaths: string[], onProgress?: ProgressCallback): Promise<number> {
+    if (onProgress) {
+      this.setProgressCallback(onProgress);
     }
 
-    if (filesToProcess.length === 0) {
-      return 0;
-    }
-
-    let filesProcessed = 0;
     const contextLimit = this.config.embedding.context_limit;
     const maxTokens = this.config.chunking.max_tokens;
     const overlapTokens = this.config.chunking.overlap_tokens;
+    const maxFileSizeKb = this.config.indexing.max_file_size_kb;
+
+    const totalFilePaths = filePaths.length;
+    let filesProcessed = 0;
+    let globalChunksProcessed = 0;
 
     if (!this.useEmbeddings) {
-      for (const file of filesToProcess) {
+      for (let i = 0; i < filePaths.length; i++) {
         if (shouldTerminate(this.db)) {
           throw Object.assign(new Error("Indexing terminated by user"), { name: "AbortError" });
         }
 
-        const chunks = chunkCode(file.content, maxTokens, overlapTokens, contextLimit);
+        if (i % YIELD_INTERVAL === 0) {
+          await new Promise((resolve) => setImmediate(resolve));
+        }
 
-        if (chunks.length > 0) {
-          try {
-            const placeholderEmbeddings = chunks.map(() => 
-              this.generatePlaceholderEmbedding(file.content)
-            );
-            
-            this.db.insertChunks(
-              file.path,
-              chunks.map((c) => ({
-                text: c.text,
-                start_line: c.start_line,
-                end_line: c.end_line,
-              })),
-              placeholderEmbeddings,
-              file.hash
-            );
-            filesProcessed++;
-            this.db.setSyncState("files_indexed", String(filesProcessed));
-          } catch (err) {
-            console.error(`Failed to index ${file.path}:`, err);
+        const filePath = filePaths[i];
+        try {
+          const fullPath = join(this.repoRoot, filePath);
+          const stat = await statAsync(fullPath);
+          
+          if (stat.size / 1024 > maxFileSizeKb) {
+            continue;
           }
+
+          const content = await readFileAsync(fullPath, "utf-8");
+          const hash = getFileHash(content);
+          const storedHash = this.db.getFileHash(filePath);
+          
+          if (storedHash === hash) {
+            continue;
+          }
+
+          const chunks = chunkCode(content, maxTokens, overlapTokens, contextLimit);
+          if (chunks.length === 0) {
+            continue;
+          }
+
+          const placeholderEmbeddings = chunks.map(() => 
+            this.generatePlaceholderEmbedding(content)
+          );
+          
+          await this.db.insertChunks(
+            filePath,
+            chunks.map((c) => ({
+              text: c.text,
+              start_line: c.start_line,
+              end_line: c.end_line,
+            })),
+            placeholderEmbeddings,
+            hash
+          );
+          
+          filesProcessed++;
+          this.db.setSyncState("files_indexed", String(filesProcessed));
+
+          const percent = Math.round((filesProcessed / totalFilePaths) * 100);
+          await this.emitProgress({
+            phase: "storing",
+            filesTotal: totalFilePaths,
+            filesProcessed,
+            chunksTotal: 0,
+            chunksProcessed: 0,
+            percent,
+            message: `[${this.generateProgressBar(percent)}] ${percent}% (${filesProcessed}/${totalFilePaths} files)`,
+          });
+        } catch {
         }
       }
       
@@ -241,98 +318,218 @@ export class IndexCoordinator {
       path: string;
       hash: string;
       chunks: Array<{ text: string; start_line: number; end_line: number }>;
-      startChunkIndex: number;
     }> = [];
 
-    let globalChunkIndex = 0;
-    for (const file of filesToProcess) {
-      const chunks = chunkCode(file.content, maxTokens, overlapTokens, contextLimit);
-      if (chunks.length > 0) {
-        chunkedFiles.push({
-          path: file.path,
-          hash: file.hash,
-          chunks: chunks.map((c) => ({
-            text: c.text,
-            start_line: c.start_line,
-            end_line: c.end_line,
-          })),
-          startChunkIndex: globalChunkIndex,
-        });
-        globalChunkIndex += chunks.length;
+    await this.emitProgress({
+      phase: "chunking",
+      filesTotal: totalFilePaths,
+      filesProcessed: 0,
+      chunksTotal: 0,
+      chunksProcessed: 0,
+      percent: 0,
+      message: `Reading and chunking ${totalFilePaths} files...`,
+    });
+
+    for (let i = 0; i < filePaths.length; i++) {
+      if (shouldTerminate(this.db)) {
+        throw Object.assign(new Error("Indexing terminated by user"), { name: "AbortError" });
+      }
+
+      if (i % YIELD_INTERVAL === 0) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+
+      const filePath = filePaths[i];
+      try {
+        const fullPath = join(this.repoRoot, filePath);
+        const stat = await statAsync(fullPath);
+        
+        if (stat.size / 1024 > maxFileSizeKb) {
+          continue;
+        }
+
+        const content = await readFileAsync(fullPath, "utf-8");
+        const hash = getFileHash(content);
+        const storedHash = this.db.getFileHash(filePath);
+        
+        if (storedHash === hash) {
+          continue;
+        }
+
+        const chunks = chunkCode(content, maxTokens, overlapTokens, contextLimit);
+        if (chunks.length > 0) {
+          chunkedFiles.push({
+            path: filePath,
+            hash,
+            chunks: chunks.map((c) => ({
+              text: c.text,
+              start_line: c.start_line,
+              end_line: c.end_line,
+            })),
+          });
+        }
+
+        if (i % 20 === 0) {
+          const percent = Math.round((i / totalFilePaths) * 30);
+          await this.emitProgress({
+            phase: "chunking",
+            filesTotal: totalFilePaths,
+            filesProcessed: i,
+            chunksTotal: chunkedFiles.reduce((sum, f) => sum + f.chunks.length, 0),
+            chunksProcessed: 0,
+            percent,
+            message: `[${this.generateProgressBar(percent)}] Chunking... (${i}/${totalFilePaths} files)`,
+          });
+        }
+      } catch {
       }
     }
 
-    const totalChunks = globalChunkIndex;
-    if (totalChunks === 0) {
+    if (chunkedFiles.length === 0) {
       return 0;
     }
 
-    const embeddings: Array<number[] | null> = new Array(totalChunks).fill(null);
+    const totalChunks = chunkedFiles.reduce((sum, f) => sum + f.chunks.length, 0);
+    
+    await this.emitProgress({
+      phase: "embedding",
+      filesTotal: chunkedFiles.length,
+      filesProcessed: 0,
+      chunksTotal: totalChunks,
+      chunksProcessed: 0,
+      percent: 30,
+      message: `Embedding ${totalChunks} chunks from ${chunkedFiles.length} files...`,
+    });
+
     const batchSize = Math.min(this.config.embedding.batch_size ?? 10, 20);
     const { concurrency } = this.config.indexing;
 
-    const chunkToFileMap = new Map<number, { fileIndex: number; localIdx: number }>();
+    const fileChunkEmbeddings = new Map<string, number[][]>();
+
     for (let fileIdx = 0; fileIdx < chunkedFiles.length; fileIdx++) {
       const file = chunkedFiles[fileIdx];
-      for (let localIdx = 0; localIdx < file.chunks.length; localIdx++) {
-        chunkToFileMap.set(file.startChunkIndex + localIdx, { fileIndex: fileIdx, localIdx });
-      }
+      fileChunkEmbeddings.set(file.path, new Array(file.chunks.length).fill(null as unknown as number[]));
     }
 
-    const embeddingBatches: Array<{ startIdx: number; texts: string[] }> = [];
-    for (let i = 0; i < totalChunks; i += batchSize) {
-      const end = Math.min(i + batchSize, totalChunks);
-      const texts: string[] = [];
-      for (let j = i; j < end; j++) {
-        const mapping = chunkToFileMap.get(j);
-        if (mapping) {
-          texts.push(chunkedFiles[mapping.fileIndex].chunks[mapping.localIdx].text);
+    const processFileBatch = async (
+      files: typeof chunkedFiles,
+      startFileIdx: number
+    ): Promise<void> => {
+      if (shouldTerminate(this.db)) {
+        throw Object.assign(new Error("Indexing terminated by user"), { name: "AbortError" });
+      }
+
+      const allTexts: string[] = [];
+      const textToFileInfo: Array<{ fileIdx: number; chunkIdx: number }> = [];
+
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        for (let chunkIdx = 0; chunkIdx < file.chunks.length; chunkIdx++) {
+          allTexts.push(file.chunks[chunkIdx].text);
+          textToFileInfo.push({ fileIdx: startFileIdx + i, chunkIdx });
         }
       }
-      if (texts.length > 0) {
-        embeddingBatches.push({ startIdx: i, texts });
-      }
-    }
 
-    const processBatch = async (batch: { startIdx: number; texts: string[] }): Promise<void> => {
-      if (shouldTerminate(this.db)) {
-        throw Object.assign(new Error("Indexing terminated by user"), { name: "AbortError" });
+      if (allTexts.length === 0) return;
+
+      const embeddings = await this.embedder.embedDocuments(allTexts);
+
+      for (let i = 0; i < textToFileInfo.length; i++) {
+        const { fileIdx, chunkIdx } = textToFileInfo[i];
+        const file = chunkedFiles[fileIdx];
+        fileChunkEmbeddings.get(file.path)![chunkIdx] = embeddings[i];
       }
 
-      const batchEmbeddings = await this.embedder.embedDocuments(batch.texts);
-      for (let i = 0; i < batchEmbeddings.length; i++) {
-        embeddings[batch.startIdx + i] = batchEmbeddings[i];
-      }
+      globalChunksProcessed += allTexts.length;
     };
 
-    for (let i = 0; i < embeddingBatches.length; i += concurrency) {
-      const batchGroup = embeddingBatches.slice(i, i + concurrency);
-      await Promise.all(batchGroup.map(processBatch));
-    }
-
-    for (const file of chunkedFiles) {
+    for (let i = 0; i < chunkedFiles.length; i += batchSize * concurrency) {
       if (shouldTerminate(this.db)) {
         throw Object.assign(new Error("Indexing terminated by user"), { name: "AbortError" });
       }
 
-      const fileEmbeddings: number[][] = [];
-      for (let i = 0; i < file.chunks.length; i++) {
-        const emb = embeddings[file.startChunkIndex + i];
-        if (emb) fileEmbeddings.push(emb);
+      const batchGroup: Array<{ files: typeof chunkedFiles; startFileIdx: number }> = [];
+      
+      for (let j = 0; j < concurrency; j++) {
+        const startIdx = i + j * batchSize;
+        if (startIdx >= chunkedFiles.length) break;
+        
+        const endIdx = Math.min(startIdx + batchSize, chunkedFiles.length);
+        batchGroup.push({
+          files: chunkedFiles.slice(startIdx, endIdx),
+          startFileIdx: startIdx,
+        });
       }
 
-      if (fileEmbeddings.length === file.chunks.length) {
+      await Promise.all(
+        batchGroup.map((batch) => processFileBatch(batch.files, batch.startFileIdx))
+      );
+
+      const percent = 30 + Math.round((globalChunksProcessed / totalChunks) * 50);
+      await this.emitProgress({
+        phase: "embedding",
+        filesTotal: chunkedFiles.length,
+        filesProcessed: 0,
+        chunksTotal: totalChunks,
+        chunksProcessed: globalChunksProcessed,
+        percent,
+        message: `[${this.generateProgressBar(percent)}] ${percent}% (${globalChunksProcessed}/${totalChunks} chunks embedded)`,
+      });
+    }
+
+    await this.emitProgress({
+      phase: "storing",
+      filesTotal: chunkedFiles.length,
+      filesProcessed: 0,
+      chunksTotal: totalChunks,
+      chunksProcessed: globalChunksProcessed,
+      percent: 80,
+      message: `Storing embeddings in database...`,
+    });
+
+    for (let i = 0; i < chunkedFiles.length; i++) {
+      if (shouldTerminate(this.db)) {
+        throw Object.assign(new Error("Indexing terminated by user"), { name: "AbortError" });
+      }
+
+      if (i % YIELD_INTERVAL === 0) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+
+      const file = chunkedFiles[i];
+      const embeddings = fileChunkEmbeddings.get(file.path);
+
+      if (embeddings && embeddings.every((e) => e !== null)) {
         try {
-          this.db.insertChunks(file.path, file.chunks, fileEmbeddings, file.hash);
+          await this.db.insertChunks(file.path, file.chunks, embeddings as number[][], file.hash);
           filesProcessed++;
           this.db.setSyncState("files_indexed", String(filesProcessed));
+
+          const percent = 80 + Math.round((filesProcessed / chunkedFiles.length) * 20);
+          await this.emitProgress({
+            phase: "storing",
+            filesTotal: chunkedFiles.length,
+            filesProcessed,
+            chunksTotal: totalChunks,
+            chunksProcessed: globalChunksProcessed,
+            percent,
+            message: `[${this.generateProgressBar(percent)}] ${percent}% (${filesProcessed}/${chunkedFiles.length} files stored)`,
+          });
         } catch (err) {
           console.error(`Failed to insert ${file.path}:`, err);
         }
       }
+
+      fileChunkEmbeddings.delete(file.path);
     }
 
     return filesProcessed;
+  }
+
+  private generateProgressBar(percent: number, width: number = 10): string {
+    const filled = Math.round((percent / 100) * width);
+    const empty = width - filled;
+    return "=".repeat(filled) + (filled < width ? ">" : "") + " ".repeat(Math.max(0, empty - (filled < width ? 1 : 0)));
   }
 
   private generatePlaceholderEmbedding(text: string): number[] {
@@ -368,11 +565,16 @@ export class IndexCoordinator {
       const fullPath = join(this.repoRoot, filePath);
 
       if (!existsSync(fullPath)) {
-        this.db.deleteChunks(filePath);
+        await this.db.deleteChunks(filePath);
         return true;
       }
 
-      const content = readFileSync(fullPath, "utf-8");
+      const stat = await statAsync(fullPath);
+      if (stat.size / 1024 > this.config.indexing.max_file_size_kb) {
+        return false;
+      }
+
+      const content = await readFileAsync(fullPath, "utf-8");
       const hash = getFileHash(content);
 
       const storedHash = this.db.getFileHash(filePath);
@@ -388,7 +590,7 @@ export class IndexCoordinator {
       );
 
       if (chunks.length === 0) {
-        this.db.deleteChunks(filePath);
+        await this.db.deleteChunks(filePath);
         return true;
       }
 
@@ -401,9 +603,9 @@ export class IndexCoordinator {
         embeddings = texts.map(() => this.generatePlaceholderEmbedding(content));
       }
 
-      this.db.deleteChunks(filePath);
+      await this.db.deleteChunks(filePath);
 
-      this.db.insertChunks(
+      await this.db.insertChunks(
         filePath,
         chunks.map((c) => ({
           text: c.text,
@@ -423,7 +625,7 @@ export class IndexCoordinator {
     }
   }
 
-  garbageCollect(): number {
+  async garbageCollect(): Promise<number> {
     try {
       const allTrackedFiles = new Set(getRepoFiles(this.repoRoot));
       const indexedFiles = this.db.getIndexedFiles();
@@ -432,7 +634,7 @@ export class IndexCoordinator {
 
       for (const indexedFile of indexedFiles) {
         if (!allTrackedFiles.has(indexedFile)) {
-          this.db.deleteChunks(indexedFile);
+          await this.db.deleteChunks(indexedFile);
           deletedCount++;
         }
       }

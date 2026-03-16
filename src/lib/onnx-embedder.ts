@@ -83,75 +83,141 @@ export class ONNXEmbedder {
     const cached = this.queryCache.get(text);
     if (cached) return cached;
 
-    const inputIds = this.tokenizer.encode(text, true);
-    const attentionMask = inputIds.map(() => 1);
-    
-    const seqLength = Math.min(inputIds.length, this.config.maxTokens);
-    const truncatedIds = inputIds.slice(0, seqLength);
-    const truncatedMask = attentionMask.slice(0, seqLength);
-
-    while (truncatedIds.length < this.config.maxTokens) {
-      truncatedIds.push(this.tokenizer.getPadTokenId());
-      truncatedMask.push(0);
-    }
-
-    const inputIdsTensor = new Tensor(
-      "int64",
-      BigInt64Array.from(truncatedIds.map(BigInt)),
-      [1, truncatedIds.length]
-    );
-
-    const attentionMaskTensor = new Tensor(
-      "int64",
-      BigInt64Array.from(truncatedMask.map(BigInt)),
-      [1, truncatedMask.length]
-    );
-
-    const feeds: Record<string, Tensor> = {
-      input_ids: inputIdsTensor,
-      attention_mask: attentionMaskTensor,
-      token_type_ids: new Tensor(
-        "int64",
-        BigInt64Array.from(new Array(truncatedIds.length).fill(BigInt(0))),
-        [1, truncatedIds.length]
-      ),
-    };
-
-    const results = await this.session.run(feeds);
-    const outputName = this.session.outputNames[0];
-    const output = results[outputName];
-
-    const embedding = this.meanPool(output.data as Float32Array, truncatedMask);
-
-    if (this.queryCache.size >= (this.config.cacheSize ?? 256)) {
-      const firstKey = this.queryCache.keys().next().value;
-      if (firstKey) this.queryCache.delete(firstKey);
-    }
-    this.queryCache.set(text, embedding);
-
-    return embedding;
+    const embeddings = await this.embedBatch([text]);
+    return embeddings[0];
   }
 
   async embedBatch(texts: string[]): Promise<number[][]> {
-    const results: number[][] = [];
-    for (const text of texts) {
-      const embedding = await this.embed(text);
-      results.push(embedding);
+    if (!this.initialized || !this.session || !this.tokenizer) {
+      throw new Error("ONNX embedder not initialized");
     }
+
+    const results: number[][] = [];
+    const uncachedTexts: string[] = [];
+    const uncachedIndices: number[] = [];
+
+    for (let i = 0; i < texts.length; i++) {
+      const cached = this.queryCache.get(texts[i]);
+      if (cached) {
+        results[i] = cached;
+      } else {
+        uncachedTexts.push(texts[i]);
+        uncachedIndices.push(i);
+      }
+    }
+
+    if (uncachedTexts.length === 0) {
+      return results;
+    }
+
+    const batchSize = Math.min(uncachedTexts.length, 32);
+    
+    for (let batchStart = 0; batchStart < uncachedTexts.length; batchStart += batchSize) {
+      const batchEnd = Math.min(batchStart + batchSize, uncachedTexts.length);
+      const batchTexts = uncachedTexts.slice(batchStart, batchEnd);
+      const batchIndices = uncachedIndices.slice(batchStart, batchEnd);
+
+      const allInputIds: number[][] = [];
+      const allAttentionMasks: number[][] = [];
+      let maxLen = 0;
+
+      for (const text of batchTexts) {
+        const inputIds = this.tokenizer!.encode(text, true);
+        const seqLength = Math.min(inputIds.length, this.config.maxTokens);
+        const truncatedIds = inputIds.slice(0, seqLength);
+        const attentionMask = new Array(seqLength).fill(1);
+
+        allInputIds.push(truncatedIds);
+        allAttentionMasks.push(attentionMask);
+        maxLen = Math.max(maxLen, truncatedIds.length);
+      }
+
+      maxLen = Math.min(maxLen, this.config.maxTokens);
+
+      const paddedInputIds: bigint[] = [];
+      const paddedAttentionMask: bigint[] = [];
+      const paddedTokenTypeIds: bigint[] = [];
+
+      for (let i = 0; i < allInputIds.length; i++) {
+        const ids = allInputIds[i];
+        const mask = allAttentionMasks[i];
+
+        for (let j = 0; j < maxLen; j++) {
+          if (j < ids.length) {
+            paddedInputIds.push(BigInt(ids[j]));
+            paddedAttentionMask.push(BigInt(mask[j] ?? 1));
+          } else {
+            paddedInputIds.push(BigInt(this.tokenizer!.getPadTokenId()));
+            paddedAttentionMask.push(BigInt(0));
+          }
+          paddedTokenTypeIds.push(BigInt(0));
+        }
+      }
+
+      const inputIdsTensor = new Tensor(
+        "int64",
+        BigInt64Array.from(paddedInputIds),
+        [batchTexts.length, maxLen]
+      );
+
+      const attentionMaskTensor = new Tensor(
+        "int64",
+        BigInt64Array.from(paddedAttentionMask),
+        [batchTexts.length, maxLen]
+      );
+
+      const tokenTypeIdsTensor = new Tensor(
+        "int64",
+        BigInt64Array.from(paddedTokenTypeIds),
+        [batchTexts.length, maxLen]
+      );
+
+      const feeds: Record<string, Tensor> = {
+        input_ids: inputIdsTensor,
+        attention_mask: attentionMaskTensor,
+        token_type_ids: tokenTypeIdsTensor,
+      };
+
+      const outputs = await this.session!.run(feeds);
+      const outputName = this.session!.outputNames[0];
+      const output = outputs[outputName];
+      const outputData = output.data as Float32Array;
+
+      for (let i = 0; i < batchTexts.length; i++) {
+        const text = batchTexts[i];
+        const originalIdx = batchIndices[i];
+        const mask = allAttentionMasks[i];
+        
+        const startIdx = i * maxLen * this.config.dimensions;
+        const endIdx = startIdx + maxLen * this.config.dimensions;
+        const tokenEmbeddings = outputData.slice(startIdx, endIdx);
+        
+        const embedding = this.meanPool(tokenEmbeddings, mask, maxLen);
+
+        if (this.queryCache.size >= (this.config.cacheSize ?? 256)) {
+          const firstKey = this.queryCache.keys().next().value;
+          if (firstKey) this.queryCache.delete(firstKey);
+        }
+        this.queryCache.set(text, embedding);
+
+        results[originalIdx] = embedding;
+      }
+    }
+
     return results;
   }
 
-  private meanPool(data: Float32Array, attentionMask: number[]): number[] {
+  private meanPool(data: Float32Array, attentionMask: number[], seqLen: number): number[] {
     const dimensions = this.config.dimensions;
     const result = new Float32Array(dimensions);
     let maskSum = 0;
 
-    for (let i = 0; i < attentionMask.length; i++) {
-      maskSum += attentionMask[i];
+    for (let i = 0; i < seqLen; i++) {
+      maskSum += attentionMask[i] ?? 0;
     }
 
-    for (let i = 0; i < attentionMask.length; i++) {
-      if (attentionMask[i] === 0) continue;
+    for (let i = 0; i < seqLen; i++) {
+      if ((attentionMask[i] ?? 0) === 0) continue;
       for (let d = 0; d < dimensions; d++) {
         result[d] += data[i * dimensions + d];
       }
@@ -196,23 +262,50 @@ export class ONNXEmbedder {
   }
 }
 
-const activeEmbedders = new Map<string, ONNXEmbedder>();
+const activeEmbedders = new Map<string, { embedder: ONNXEmbedder; refCount: number }>();
 
 export function getOrCreateONNXEmbedder(config: ONNXEmbedderConfig): ONNXEmbedder {
-  let embedder = activeEmbedders.get(config.modelPath);
+  let entry = activeEmbedders.get(config.modelPath);
 
-  if (!embedder) {
-    embedder = new ONNXEmbedder(config);
-    activeEmbedders.set(config.modelPath, embedder);
+  if (!entry) {
+    const embedder = new ONNXEmbedder(config);
+    entry = { embedder, refCount: 0 };
+    activeEmbedders.set(config.modelPath, entry);
   }
 
-  return embedder;
+  entry.refCount++;
+  return entry.embedder;
+}
+
+export function releaseONNXEmbedder(modelPath: string): void {
+  const entry = activeEmbedders.get(modelPath);
+  if (entry) {
+    entry.refCount--;
+    if (entry.refCount <= 0) {
+      entry.embedder.close();
+      activeEmbedders.delete(modelPath);
+    }
+  }
 }
 
 export async function closeONNXEmbedder(modelPath: string): Promise<void> {
-  const embedder = activeEmbedders.get(modelPath);
-  if (embedder) {
-    await embedder.close();
+  const entry = activeEmbedders.get(modelPath);
+  if (entry) {
+    await entry.embedder.close();
     activeEmbedders.delete(modelPath);
   }
+}
+
+export async function closeAllONNXEmbedders(): Promise<void> {
+  for (const entry of activeEmbedders.values()) {
+    await entry.embedder.close();
+  }
+  activeEmbedders.clear();
+}
+
+export function getONNXEmbedderStats(): { count: number; models: string[] } {
+  return {
+    count: activeEmbedders.size,
+    models: Array.from(activeEmbedders.keys()),
+  };
 }

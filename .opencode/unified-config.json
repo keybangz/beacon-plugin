@@ -1,0 +1,89 @@
+{
+  "caching": {
+    "enabled": true,
+    "ttl": 300000,
+    "maxSize": 100,
+    "cacheSystemPrompt": true,
+    "cacheToolDefinitions": true,
+    "cacheThreshold": 1024
+  },
+  "cascade": {
+    "enabled": true,
+    "cascade": ["qwen-2.5-7b", "claude-3-5-haiku", "claude-3-5-sonnet"],
+    "retryOnErrors": ["context_length_exceeded", "rate_limit_exceeded", "timeout", "model_overloaded"],
+    "maxRetries": 2,
+    "escalateOn": {
+      "contextTooLong": true,
+      "rateLimit": true,
+      "capabilityInsufficient": true,
+      "timeout": true
+    }
+  },
+  "contextDedup": {
+    "enabled": true,
+    "similarityThreshold": 0.85,
+    "maxContextSize": 50000,
+    "deduplicateMessages": true,
+    "deduplicateToolResults": true,
+    "preserveRecent": 5
+  },
+  "contextManager": {
+    "limits": {
+      "read": 500,
+      "grep": 50,
+      "bash": 200,
+      "glob": 100,
+      "webfetch": 300,
+      "default": 500
+    },
+    "stripAnsi": true,
+    "deduplicateLines": false,
+    "preserveStructure": true,
+    "truncationMessage": "\n...[truncated]",
+    "preserveJsonXml": true,
+    "preserveMarkdown": true,
+    "smartTruncate": true
+  },
+  "costMonitor": {
+    "pricing": {
+      "claude-3-5-sonnet": { "inputPer1k": 0.003, "outputPer1k": 0.015, "cacheReadPer1k": 0.0003 },
+      "claude-3-5-haiku": { "inputPer1k": 0.001, "outputPer1k": 0.005, "cacheReadPer1k": 0.0001 },
+      "qwen-2.5-7b": { "inputPer1k": 0.0005, "outputPer1k": 0.001 },
+      "gpt-4o": { "inputPer1k": 0.005, "outputPer1k": 0.015 }
+    },
+    "alertThresholds": [0.5, 1, 5, 10],
+    "currency": "USD"
+  },
+  "modelRouter": {
+    "models": { "small": "qwen-2.5-7b", "medium": "claude-3-5-haiku", "large": "claude-3-5-sonnet" },
+    "complexityThresholds": { "low": 10, "medium": 25 },
+    "forceSmallPatterns": ["\\b(list|ls|dir|find|grep|search|read|cat|head|tail)\\b", "\\bwhat is\\b", "\\bshow me\\b"],
+    "forceLargePatterns": ["\\b(architect|design|refactor|rewrite|migrate)\\b", "\\b(debug|troubleshoot|investigate)\\b"],
+    "preserveOriginalModel": false
+  },
+  "predictive": {
+    "enabled": true,
+    "prefetchThreshold": 0.6,
+    "cacheCommonFiles": true,
+    "predictBasedOnHistory": true,
+    "maxPrefetch": 3
+  },
+  "promptCompression": {
+    "enabled": true,
+    "maxPromptLength": 8000,
+    "removeRedundancy": true,
+    "compressWhitespace": true,
+    "removeComments": true,
+    "abbreviateCommon": true,
+    "preserveCode": true
+  },
+  "statePersistence": {
+    "maxMemories": 500,
+    "relevanceDecay": 0.95,
+    "persistPath": ".opencode/memory.json",
+    "autoSaveInterval": 60000
+  },
+  "tokenOptimizer": {
+    "sessionLimit": 150000
+  }
+}

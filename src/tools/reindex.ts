@@ -1,17 +1,35 @@
-/**
- * Beacon Reindex Tool for OpenCode
- * Forces full rebuild from scratch
-
- */
-
 import { tool } from "@opencode-ai/plugin";
 import { getRepoRoot } from "../lib/repo-root.js";
 import { loadConfig } from "../lib/config.js";
 import { openDatabase } from "../lib/db.js";
 import { Embedder } from "../lib/embedder.js";
-import { IndexCoordinator } from "../lib/sync.js";
+import { IndexCoordinator, type IndexProgress } from "../lib/sync.js";
 import { join } from "path";
-import { mkdirSync, existsSync, unlinkSync, rmSync } from "fs";
+import { mkdirSync, existsSync, unlinkSync } from "fs";
+
+function formatProgressTitle(progress: IndexProgress): string {
+  const phaseEmoji: Record<string, string> = {
+    discovering: "🔍",
+    chunking: "📦",
+    embedding: "🧠",
+    storing: "💾",
+    complete: "✅",
+    error: "❌",
+  };
+
+  const emoji = phaseEmoji[progress.phase] || "⚡";
+  return `${emoji} Beacon Reindex: ${progress.percent}% - ${progress.phase}`;
+}
+
+function shouldShowProgress(percent: number, phase: string, lastMilestone: { percent: number; phase: string }): boolean {
+  if (phase === "error" || phase === "complete") return true;
+  if (phase !== lastMilestone.phase) return true;
+  const milestones = [10, 25, 50, 75, 90, 100];
+  for (const m of milestones) {
+    if (percent >= m && lastMilestone.percent < m) return true;
+  }
+  return false;
+}
 
 export default tool({
   description:
@@ -27,7 +45,6 @@ export default tool({
       const repoRoot = getRepoRoot(context.worktree);
       const config = loadConfig(repoRoot);
 
-      // Ensure storage directory exists
       const storagePath = join(repoRoot, config.storage.path);
       if (!existsSync(storagePath)) {
         mkdirSync(storagePath, { recursive: true });
@@ -35,29 +52,22 @@ export default tool({
 
       const dbPath = join(storagePath, "embeddings.db");
 
-      // Delete existing database files to guarantee a truly clean slate.
-      // Relying on db.clear() (DELETE FROM chunks) is not sufficient when
-      // config parameters like max_tokens or dimensions have changed between runs.
       for (const suffix of ["", "-wal", "-shm"]) {
         const f = dbPath + suffix;
         if (existsSync(f)) unlinkSync(f);
       }
 
-      // Also delete HNSW index files to ensure fresh index
       const hnswIndexFile = join(storagePath, "hnsw.index");
       const hnswEntriesFile = join(storagePath, "hnsw.entries.json");
       if (existsSync(hnswIndexFile)) unlinkSync(hnswIndexFile);
       if (existsSync(hnswEntriesFile)) unlinkSync(hnswEntriesFile);
 
-      // Initialize database
       const db = openDatabase(dbPath, config.embedding.dimensions);
 
       try {
-        // Initialize embedder - use context_limit if set, otherwise chunking max_tokens
         const effectiveContextLimit = config.embedding.context_limit ?? config.chunking.max_tokens;
         const embedder = new Embedder(config.embedding, effectiveContextLimit, storagePath);
 
-        // Create index coordinator
         const coordinator = new IndexCoordinator(
           config,
           db,
@@ -65,15 +75,27 @@ export default tool({
           repoRoot
         );
 
-        // Perform full index
+        const lastMilestone = { percent: 0, phase: "" };
+
+        const onProgress = (progress: IndexProgress) => {
+          if (shouldShowProgress(progress.percent, progress.phase, lastMilestone)) {
+            lastMilestone.percent = progress.percent;
+            lastMilestone.phase = progress.phase;
+          }
+        };
+        
         const startTime = Date.now();
-        const result = await coordinator.performFullIndex();
+        const result = await coordinator.performFullIndex(onProgress);
         const endTime = Date.now();
         const durationSeconds = ((endTime - startTime) / 1000).toFixed(2);
 
-        // Get final statistics
         const stats = db.getStats();
         const syncProgress = db.getSyncProgress();
+
+        context.metadata({ 
+          title: `Beacon Reindex: ${stats.total_chunks} chunks`,
+          metadata: { chunks: stats.total_chunks, files: result.filesIndexed }
+        });
 
         return JSON.stringify({
           status: "success",
@@ -98,6 +120,9 @@ export default tool({
     } catch (error: unknown) {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
+      
+      context.metadata({ title: `❌ Beacon Reindex Failed` });
+      
       return JSON.stringify({
         status: "error",
         error: `Reindex failed: ${errorMessage}`,

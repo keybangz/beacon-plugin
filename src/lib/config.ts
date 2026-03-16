@@ -56,7 +56,7 @@ const DEFAULT_CONFIG: BeaconConfig = {
   },
   search: {
     top_k: 10,
-    similarity_threshold: 0.01,
+    similarity_threshold: 0.35,
     hybrid: {
       enabled: true,
       weight_vector: 0.4,

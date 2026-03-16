@@ -13,9 +13,12 @@ import { join } from "path";
  */
 export function findRepoRoot(startPath: string = process.cwd()): string | null {
   let currentPath: string = startPath;
+  let previousPath: string = "";
+  let iterationCount = 0;
+  const MAX_ITERATIONS = 100; // Reasonable limit for directory depth
 
   // Search up the directory tree for .git directory
-  while (true) {
+  while (iterationCount < MAX_ITERATIONS) {
     const gitPath: string = join(currentPath, ".git");
 
     if (existsSync(gitPath)) {
@@ -24,13 +27,19 @@ export function findRepoRoot(startPath: string = process.cwd()): string | null {
 
     const parentPath: string = join(currentPath, "..");
 
-    // Prevent infinite loop at filesystem root
-    if (parentPath === currentPath) {
+    // Prevent infinite loop at filesystem root or symlink loops
+    if (parentPath === currentPath || currentPath === previousPath) {
       return null;
     }
 
+    // Additional safeguard: if we went through many iterations without progress
+    iterationCount++;
+    previousPath = currentPath;
     currentPath = parentPath;
   }
+
+  // If we hit the iteration limit, return null
+  return null;
 }
 
 /**

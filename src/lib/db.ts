@@ -49,16 +49,35 @@ export class BeaconDatabase {
   private useHNSW: boolean = true;
 
   constructor(dbPath: string, dimensions: number, useHNSW: boolean = true) {
-    this.db = new Database(dbPath, { create: true });
-    this.dbPath = dbPath;
-    this.dimensions = dimensions;
-    this.useHNSW = useHNSW;
-    this.init();
+    try {
+      this.db = new Database(dbPath, { create: true });
+      this.dbPath = dbPath;
+      this.dimensions = dimensions;
+      this.useHNSW = useHNSW;
+      
+      // Initialize database schema first
+      this.init();
 
-    if (this.useHNSW) {
-      const storagePath = dirname(dbPath);
-      this.hnswIndex = new HNSWVectorIndex(dimensions, storagePath);
-      this.hnswIndex.initialize();
+      // Initialize HNSW with error handling - it can fail silently
+      if (this.useHNSW) {
+        try {
+          const storagePath = dirname(dbPath);
+          this.hnswIndex = new HNSWVectorIndex(dimensions, storagePath);
+          this.hnswIndex.initialize();
+        } catch (error) {
+          console.warn(`[Beacon] HNSW initialization failed: ${error instanceof Error ? error.message : String(error)}. Falling back to vector-only search.`);
+          this.hnswIndex = null;
+          this.useHNSW = false;
+        }
+      }
+    } catch (error) {
+      // Ensure we clean up the database if initialization fails
+      if (this.db) {
+        try {
+          this.db.close();
+        } catch {}
+      }
+      throw new Error(`Failed to initialize database: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -325,12 +344,12 @@ export class BeaconDatabase {
   /**
    * Insert or update chunks for a file
    */
-  insertChunks(
+  async insertChunks(
     filePath: string,
     chunks: Array<{ text: string; start_line: number; end_line: number }>,
     embeddings: number[][],
     fileHash: string,
-  ): void {
+  ): Promise<void> {
     if (chunks.length !== embeddings.length) {
       throw new Error(
         `Chunk count mismatch: ${chunks.length} chunks but ${embeddings.length} embeddings`,
@@ -338,7 +357,7 @@ export class BeaconDatabase {
     }
 
     if (this.hnswIndex) {
-      this.hnswIndex.removeFile(filePath);
+      await this.hnswIndex.removeFile(filePath);
     }
 
     const deleteChunks = this.db.prepare(
@@ -382,9 +401,27 @@ export class BeaconDatabase {
 
         const chunkId = (lastInsertId.get() as { id: number }).id;
         insertFts.run(chunkId, filePath, chunk.text, identifiers);
+      }
+    });
 
-        if (this.hnswIndex) {
-          this.hnswIndex.addVector(`${filePath}:${i}`, embedding, {
+    try {
+      transaction();
+    } catch (error) {
+      // Transaction failed, database will rollback automatically
+      // But we need to ensure HNSW doesn't get out of sync
+      if (this.hnswIndex) {
+        // Ensure HNSW state is cleared for this file
+        await this.hnswIndex.removeFile(filePath).catch(() => {});
+      }
+      throw new Error(`Failed to insert chunks for ${filePath}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    // Only update HNSW if DB transaction succeeded
+    if (this.hnswIndex) {
+      try {
+        for (let i = 0; i < chunks.length; i++) {
+          const chunk = chunks[i];
+          await this.hnswIndex.addVector(`${filePath}:${i}`, embeddings[i], {
             filePath,
             startLine: chunk.start_line,
             endLine: chunk.end_line,
@@ -392,18 +429,20 @@ export class BeaconDatabase {
             chunkId: `${filePath}:${i}`,
           });
         }
+      } catch (error) {
+        console.error(`[Beacon] HNSW indexing failed for ${filePath}:`, error);
+        // DB is already committed, but HNSW failed
+        // This is acceptable - search will still work via FTS
       }
-    });
-
-    transaction();
+    }
   }
 
   /**
    * Delete chunks for a file
    */
-  deleteChunks(filePath: string): void {
+  async deleteChunks(filePath: string): Promise<void> {
     if (this.hnswIndex) {
-      this.hnswIndex.removeFile(filePath);
+      await this.hnswIndex.removeFile(filePath);
     }
     const transaction = this.db.transaction(() => {
       this.db.prepare("DELETE FROM chunks WHERE file_path = ?").run(filePath);
@@ -946,9 +985,10 @@ export class BeaconDatabase {
         (weights.weight_rrf || 0.3);
 
       // For hybrid search, normalize RRF score to 0-1 range for display
-      // Max possible RRF score is 2/61 ≈ 0.033, so we normalize by that
-      const maxRffScore = 2 / 61;
-      const normalizedScore = Math.min(1, result.rrfScore / maxRffScore);
+      // Max RRF = 2/61 ≈ 0.033, but after weight_rrf (0.3) multiplier, max is ~0.01
+      // Also account for identifier boost and file type multipliers which can increase scores
+      const baseMaxRrfScore = (2 / 61) * (weights.weight_rrf || 0.3);
+      const normalizedScore = Math.min(1, result.rrfScore / baseMaxRrfScore);
       result.similarity = normalizedScore;
     }
 

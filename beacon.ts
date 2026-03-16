@@ -1,8 +1,3 @@
-/**
- * Beacon OpenCode Plugin
- * Main plugin entry point with event hooks for auto-sync, re-embedding, and garbage collection
- */
-
 import type { Plugin } from "@opencode-ai/plugin";
 import SearchTool from "./src/tools/search.js";
 import IndexTool from "./src/tools/index.js";
@@ -14,22 +9,14 @@ import WhitelistTool from "./src/tools/whitelist.js";
 import PerformanceTool from "./src/tools/performance.js";
 import TerminateIndexerTool from "./src/tools/terminate-indexer.js";
 import DownloadModelTool from "./src/tools/download-model.js";
-import { getRepoRoot } from "./src/lib/repo-root.js";
+import { findRepoRoot } from "./src/lib/repo-root.js";
 import { loadConfig } from "./src/lib/config.js";
-import { openDatabase } from "./src/lib/db.js";
-import { Embedder } from "./src/lib/embedder.js";
-import { IndexCoordinator } from "./src/lib/sync.js";
 import { getOrCreateWatcher } from "./src/lib/watcher.js";
-import { join, dirname } from "path";
-import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs";
+import { getCoordinator, releaseCoordinator } from "./src/lib/pool.js";
+import type { IndexProgress } from "./src/lib/sync.js";
 
-/**
- * Extract file path from tool arguments
- */
 function extractFilePath(args: any, toolName: string): string | null {
   if (!args) return null;
-
-  // Handle different tool argument formats
   if (toolName === "write_file" || toolName === "edit_file") {
     return args.file_path || args.path || args.file || null;
   }
@@ -39,21 +26,15 @@ function extractFilePath(args: any, toolName: string): string | null {
   return null;
 }
 
-/**
- * Extract deleted/moved file paths from shell commands
- * Detects: rm, rmdir, mv, git rm, git mv
- */
 function extractDeletedFiles(command: string): string[] {
   const files: string[] = [];
   if (!command) return files;
 
-  // Pattern for rm, rmdir commands
   const rmPattern = /(?:^|\s)(?:rm|rmdir)\s+(?:-[rf]+\s+)?(.+)/g;
   let match;
 
   while ((match = rmPattern.exec(command)) !== null) {
     const args = match[1].trim();
-    // Split by common separators, filter out flags
     const parts = args.split(/[&&||;\s]+/);
     for (const part of parts) {
       const cleaned = part.replace(/^-[rf]+\s*/, "").trim();
@@ -67,7 +48,6 @@ function extractDeletedFiles(command: string): string[] {
     }
   }
 
-  // Pattern for git rm
   const gitRmPattern = /git\s+rm\s+(-[rf]+\s+)?(.+)/g;
   while ((match = gitRmPattern.exec(command)) !== null) {
     const args = match[2].trim();
@@ -80,12 +60,10 @@ function extractDeletedFiles(command: string): string[] {
     }
   }
 
-  // Pattern for git mv (move/rename)
   const gitMvPattern = /git\s+mv\s+(.+)/g;
   while ((match = gitMvPattern.exec(command)) !== null) {
     const args = match[1].trim();
     const parts = args.split(/[&&||;\s]+/);
-    // git mv takes two args: source dest, we track both as potentially orphaned
     for (const part of parts) {
       if (part && !part.startsWith("-")) {
         files.push(part);
@@ -93,164 +71,253 @@ function extractDeletedFiles(command: string): string[] {
     }
   }
 
-  return [...new Set(files)]; // Remove duplicates
+  return [...new Set(files)];
 }
 
-/**
- * Initialize indexing coordinator for a given worktree
- */
-function getCoordinator(worktree: string) {
-  const repoRoot = getRepoRoot(worktree);
-  const config = loadConfig(repoRoot);
-  const storagePath = join(repoRoot, config.storage.path);
-  const dbPath = join(storagePath, "embeddings.db");
-  const db = openDatabase(dbPath, config.embedding.dimensions);
-  const embedder = new Embedder(
-    config.embedding,
-    config.embedding.context_limit,
-    storagePath,
-  );
-  const coordinator = new IndexCoordinator(config, db, embedder, repoRoot);
-  return { coordinator, db, config };
+function formatProgressMessage(progress: IndexProgress): string {
+  const barLength = 20;
+  const filled = Math.round((progress.percent / 100) * barLength);
+  const bar = "█".repeat(filled) + "░".repeat(barLength - filled);
+
+  const phaseEmoji: Record<string, string> = {
+    discovering: "🔍",
+    chunking: "📝",
+    embedding: "🧠",
+    storing: "💾",
+    complete: "✅",
+    error: "❌",
+  };
+
+  const emoji = phaseEmoji[progress.phase] || "📊";
+  return `${emoji} **Beacon Indexing** [${bar}] ${progress.percent}%\n${progress.message}`;
 }
 
-/**
- * Beacon plugin for OpenCode
- * Handles:
- * - Real-time file watching for incremental indexing
- * - Garbage collection after bash/file tool calls
- * - Context injection before compaction
- * - Shell environment setup
- */
+function shouldShowProgress(
+  progress: IndexProgress,
+  lastMilestone: { percent: number; phase: string },
+): boolean {
+  if (progress.phase === "error" || progress.phase === "complete") return true;
+  if (progress.phase !== lastMilestone.phase) return true;
+  const milestones = [25, 50, 75, 100];
+  for (const m of milestones) {
+    if (progress.percent >= m && lastMilestone.percent < m) return true;
+  }
+  return false;
+}
+
 export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
-  let repoRoot: string;
-  let config: ReturnType<typeof loadConfig>;
+  let repoRoot: string | null = null;
+  let config: ReturnType<typeof loadConfig> | null = null;
   let fileWatcher: ReturnType<typeof getOrCreateWatcher> | null = null;
+  let isInitialized = false;
+  let hasAttemptedAutoIndex = false;
 
-  try {
-    repoRoot = getRepoRoot(worktree);
-    config = loadConfig(repoRoot);
-    fileWatcher = getOrCreateWatcher(repoRoot, config);
+  function isGitInitCommand(command: string): boolean {
+    return command.includes("git init") && !command.includes("git reinit");
+  }
 
-    fileWatcher.on("add", async (filePath: string) => {
-      try {
-        const { coordinator, db } = getCoordinator(worktree);
-        await coordinator.reembedFile(filePath);
-        db.close();
-        await client.app.log({
-          body: {
-            service: "beacon",
-            level: "debug",
-            message: `Indexed new file: ${filePath}`,
-          },
-        });
-      } catch (err) {
-        await client.app.log({
-          body: {
-            service: "beacon",
-            level: "warn",
-            message: `Failed to index ${filePath}: ${err}`,
-          },
-        });
-      }
-    });
+  function isGrepCodeSearch(command: string): boolean {
+    // Don't interfere with git grep
+    if (command.includes("git grep")) return false;
+    
+    // Don't interfere with pipes to grep
+    if (/\|\s*grep/.test(command)) return false;
+    
+    // Don't interfere with output redirection
+    if (command.includes(">")) return false;
+    
+    // Check for explicit file extensions or context
+    const hasFileExtension = /\.(ts|tsx|js|jsx|py|go|rs|java|rb|php|sql|md)$/m.test(command);
+    const hasQueryNoFile = /^[^>]*grep\s+[^|]*['"][^'"]+['"][^|]*$/m.test(command);
+    
+    // Avoid false positives for file operations
+    if (command.includes("-l") && !hasFileExtension) {
+      // List-only mode, likely checking for existence
+      return false;
+    }
+    
+    return hasFileExtension || hasQueryNoFile;
+  }
 
-    fileWatcher.on("change", async (filePath: string) => {
-      try {
-        const { coordinator, db } = getCoordinator(worktree);
-        await coordinator.reembedFile(filePath);
-        db.close();
-        await client.app.log({
-          body: {
-            service: "beacon",
-            level: "debug",
-            message: `Reindexed changed file: ${filePath}`,
-          },
-        });
-      } catch (err) {
-        await client.app.log({
-          body: {
-            service: "beacon",
-            level: "warn",
-            message: `Failed to reindex ${filePath}: ${err}`,
-          },
-        });
-      }
-    });
+  function extractGrepQuery(command: string): string | null {
+    const match = command.match(/grep\s+(?:-[a-zA-Z]+\s+)*["']([^"']+)["']/);
+    return match?.[1] || null;
+  }
 
-    fileWatcher.on("unlink", async (filePath: string) => {
-      try {
-        const { coordinator, db } = getCoordinator(worktree);
-        db.deleteChunks(filePath);
-        coordinator.garbageCollect();
-        db.close();
-        await client.app.log({
-          body: {
-            service: "beacon",
-            level: "debug",
-            message: `Removed deleted file: ${filePath}`,
-          },
-        });
-      } catch (err) {
-        await client.app.log({
-          body: {
-            service: "beacon",
-            level: "warn",
-            message: `Failed to remove ${filePath}: ${err}`,
-          },
-        });
-      }
-    });
+  async function performAutoIndex(sessionID?: string): Promise<void> {
+    if (!isInitialized || !config) return;
+    if (!config.indexing.auto_index) return;
+    
+    const pooled = await getCoordinator(worktree);
+    const stats = pooled.db.getStats();
+    
+    if (stats.total_chunks > 0) {
+      await releaseCoordinator(worktree);
+      return;
+    }
 
-    fileWatcher.on("error", async (error: Error) => {
-      await client.app.log({
+    const lastMilestone = { percent: 0, phase: "" };
+    
+    if (sessionID) {
+      await pooled.coordinator.performFullIndex(async (progress) => {
+        if (shouldShowProgress(progress, lastMilestone)) {
+          lastMilestone.percent = progress.percent;
+          lastMilestone.phase = progress.phase;
+          if (progress.phase !== "complete" && progress.phase !== "error") {
+            await client.session.prompt({
+              path: { id: sessionID },
+              body: {
+                noReply: true,
+                parts: [
+                  {
+                    type: "text",
+                    text: formatProgressMessage(progress),
+                    synthetic: true,
+                    ignored: true,
+                  },
+                ],
+              },
+            });
+          }
+        }
+      });
+      
+      await client.session.prompt({
+        path: { id: sessionID },
         body: {
-          service: "beacon",
-          level: "error",
-          message: `File watcher error: ${error.message}`,
+          noReply: true,
+          parts: [
+            {
+              type: "text",
+              text: "✅ **Beacon Indexing Complete**\nYour codebase is now indexed and ready for semantic search.",
+              synthetic: true,
+              ignored: true,
+            },
+          ],
         },
       });
-    });
-
-    fileWatcher.start();
-
-    await client.app.log({
-      body: {
-        service: "beacon",
-        level: "info",
-        message: `Beacon plugin initialized for ${repoRoot}`,
-      },
-    });
-  } catch (err) {
-    await client.app.log({
-      body: {
-        service: "beacon",
-        level: "error",
-        message: `Beacon initialization failed: ${err}`,
-      },
-    });
+    } else {
+      // Silent indexing for plugin init
+      await pooled.coordinator.performFullIndex();
+    }
+    
+    await releaseCoordinator(worktree);
   }
+
+  async function initializePlugin(): Promise<boolean> {
+    if (isInitialized) return true;
+
+    const detectedRoot = findRepoRoot(worktree);
+    if (!detectedRoot) return false;
+
+    try {
+      repoRoot = detectedRoot;
+      config = loadConfig(repoRoot);
+      fileWatcher = await getOrCreateWatcher(repoRoot, config);
+
+      fileWatcher.on("add", async (filePath: string) => {
+        let pooled;
+        try {
+          pooled = await getCoordinator(worktree);
+          await pooled.coordinator.reembedFile(filePath);
+        } catch (error) {
+          console.error(`[Beacon] Error adding file ${filePath}:`, error);
+        } finally {
+          if (pooled) {
+            try {
+              await releaseCoordinator(worktree);
+            } catch {}
+          }
+        }
+      });
+
+      fileWatcher.on("change", async (filePath: string) => {
+        let pooled;
+        try {
+          pooled = await getCoordinator(worktree);
+          await pooled.coordinator.reembedFile(filePath);
+        } catch (error) {
+          console.error(`[Beacon] Error reembedding file ${filePath}:`, error);
+        } finally {
+          if (pooled) {
+            try {
+              await releaseCoordinator(worktree);
+            } catch {}
+          }
+        }
+      });
+
+      fileWatcher.on("unlink", async (filePath: string) => {
+        let pooled;
+        try {
+          pooled = await getCoordinator(worktree);
+          pooled.db.deleteChunks(filePath);
+          pooled.coordinator.garbageCollect();
+        } catch (error) {
+          console.error(`[Beacon] Error deleting file ${filePath}:`, error);
+        } finally {
+          if (pooled) {
+            try {
+              await releaseCoordinator(worktree);
+            } catch {}
+          }
+        }
+      });
+
+      fileWatcher.on("error", (error: Error) => {
+        console.error(`[Beacon] File watcher error:`, error);
+      });
+
+      fileWatcher.start();
+      isInitialized = true;
+
+      // Perform auto-indexing on initialization if configured
+      if (config.indexing.auto_index && !hasAttemptedAutoIndex) {
+        hasAttemptedAutoIndex = true;
+        // Run silently in background
+        performAutoIndex().catch((error) => {
+          console.error(`[Beacon] Auto-indexing error:`, error);
+        });
+      }
+
+      return true;
+    } catch (error) {
+      console.error(`[Beacon] Plugin initialization error:`, error);
+      return false;
+    }
+  }
+
+  await initializePlugin();
 
   return {
     event: async ({ event }) => {
       if (event.type === "session.created") {
-        try {
-          const { coordinator, db } = getCoordinator(worktree);
-          await coordinator.performFullIndex();
-          db.close();
-        } catch (err) {
-          await client.app.log({
-            body: {
-              service: "beacon",
-              level: "warn",
-              message: `Session index failed: ${err}`,
-            },
-          });
+        const sessionID = (event as any).properties?.info?.id;
+        if (!sessionID) return;
+
+        if (!isInitialized) {
+          const initialized = await initializePlugin();
+          if (!initialized) return;
+        }
+
+        if (!hasAttemptedAutoIndex) {
+          hasAttemptedAutoIndex = true;
+          await performAutoIndex(sessionID);
+        } else {
+          // Check if indexing is needed and show status
+          const pooled = await getCoordinator(worktree);
+          const stats = pooled.db.getStats();
+          
+          if (stats.total_chunks === 0 && config?.indexing.auto_index) {
+            await releaseCoordinator(worktree);
+            await performAutoIndex(sessionID);
+          } else {
+            await releaseCoordinator(worktree);
+          }
         }
       }
     },
 
-    // Custom tools - search replaces built-in grep with semantic search
     tool: {
       grep: SearchTool,
       search: SearchTool,
@@ -265,132 +332,155 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
       downloadModels: DownloadModelTool,
     },
 
-    // Tool execution hook - handle post-tool sync and garbage collection
-    "tool.execute.after": async (input, output) => {
-      try {
-        // If a file-modifying tool was executed, re-embed the changed file
-        const fileTools = ["write_file", "edit_file", "str_replace_editor"];
-        const shellTools = ["bash", "shell"];
+    "tool.execute.before": async (input, output) => {
+      const shellTools = ["bash", "shell"];
+      if (!shellTools.includes(input.tool)) return;
 
-        if (fileTools.includes(input.tool)) {
-          const filePath = extractFilePath(input.args, input.tool);
-          if (filePath) {
-            try {
-              const { coordinator, db } = getCoordinator(worktree);
-              const success = await coordinator.reembedFile(filePath);
-              db.close();
+      const command = output.args?.command || output.args?.cmd || "";
+      if (!/\bgrep\b/.test(command) || command.includes("git grep")) return;
 
-              if (success) {
-                await client.app.log({
-                  body: {
-                    service: "beacon",
-                    level: "info",
-                    message: `Auto-reindexed ${filePath}`,
-                  },
-                });
+      // Check if this is a code search pattern (file extensions or no explicit file)
+      const isLikelyCodeSearch = 
+        !command.includes(">") && 
+        !/\|\s*grep/.test(command) &&
+        (/\.(ts|tsx|js|jsx|py|go|rs|java|rb|php|sql|md)$/m.test(command) || 
+         /^[^>]*grep\s+[^|]*['"][^'"]+['"][^|]*$/m.test(command));
+
+      if (isLikelyCodeSearch) {
+        const grepMatch = command.match(/grep\s+(?:-[a-zA-Z]+\s+)*["']([^"']+)["']/);
+        const query = grepMatch?.[1];
+
+        if (query && query.length > 2) {
+          // Log a suggestion but don't block execution
+          console.warn(
+            `💡 Beacon Tip: For code searches, consider using the 'search' tool:\n` +
+            `   search(query="${query}")\n` +
+            `   (This provides semantic matching and better results)\n` +
+            `   Proceeding with grep as requested...`
+          );
+          // Don't throw - allow execution to continue
+          return;
+        }
+      }
+      
+      // For pipeline operations, file searches, or explicit non-code use cases, allow grep
+      // No warning needed - grep is appropriate here
+    },
+
+    "tool.execute.after": async (input) => {
+      const shellTools = ["bash", "shell"];
+
+      if (shellTools.includes(input.tool)) {
+        const command = input.args?.command || input.args?.cmd || "";
+
+        if (isGitInitCommand(command)) {
+          // Reset state to allow re-detection of git repo
+          isInitialized = false;
+          hasAttemptedAutoIndex = false;
+          
+          // Retry with exponential backoff
+          const maxRetries = 5;
+          for (let i = 0; i < maxRetries; i++) {
+            await new Promise(resolve => setTimeout(resolve, 100 * (i + 1)));
+            const success = await initializePlugin();
+            if (success) {
+              // Immediately perform auto-indexing for the newly detected repo
+              if (config?.indexing.auto_index) {
+                await performAutoIndex();
               }
-            } catch (err) {
-              // Log but don't fail the hook
-              await client.app.log({
-                body: {
-                  service: "beacon",
-                  level: "warn",
-                  message: `Auto-reindex failed for ${filePath}: ${err}`,
-                },
-              });
-            }
-          }
-        } else if (shellTools.includes(input.tool)) {
-          // Garbage collection for deleted/moved files
-          const command = input.args?.command || input.args?.cmd || "";
-          const deletedFiles = extractDeletedFiles(command);
-
-          if (deletedFiles.length > 0) {
-            try {
-              const { coordinator, db } = getCoordinator(worktree);
-              let removedCount = 0;
-
-              for (const filePath of deletedFiles) {
-                coordinator.garbageCollect();
-                removedCount++;
-              }
-
-              db.close();
-
-              if (removedCount > 0) {
-                await client.app.log({
-                  body: {
-                    service: "beacon",
-                    level: "info",
-                    message: `Garbage collected ${removedCount} deleted files`,
-                  },
-                });
-              }
-            } catch (err) {
-              // Log but don't fail the hook
+              break;
             }
           }
         }
-      } catch (error: unknown) {
-        const errorMsg = error instanceof Error ? error.message : String(error);
-        await client.app.log({
-          body: {
-            service: "beacon",
-            level: "warn",
-            message: `Post-tool sync failed: ${errorMsg}`,
-          },
-        });
+      }
+
+      if (!isInitialized) return;
+
+      const fileTools = ["write_file", "edit_file", "str_replace_editor"];
+
+      if (fileTools.includes(input.tool)) {
+        const filePath = extractFilePath(input.args, input.tool);
+        if (filePath) {
+          let pooled;
+          try {
+            pooled = await getCoordinator(worktree);
+            await pooled.coordinator.reembedFile(filePath);
+          } catch (error) {
+            console.error(`[Beacon] Error reembedding file ${filePath}:`, error);
+          } finally {
+            if (pooled) {
+              try {
+                await releaseCoordinator(worktree);
+              } catch {}
+            }
+          }
+        }
+      } else if (shellTools.includes(input.tool)) {
+        const command = input.args?.command || input.args?.cmd || "";
+        const deletedFiles = extractDeletedFiles(command);
+
+        if (deletedFiles.length > 0) {
+          let pooled;
+          try {
+            pooled = await getCoordinator(worktree);
+            for (const _ of deletedFiles) {
+              pooled.coordinator.garbageCollect();
+            }
+          } catch (error) {
+            console.error(`[Beacon] Error garbage collecting:`, error);
+          } finally {
+            if (pooled) {
+              try {
+                await releaseCoordinator(worktree);
+              } catch {}
+            }
+          }
+        }
       }
     },
 
-    // Compaction hook - inject index status into context
-    "experimental.session.compacting": async (input, output) => {
-      try {
-        let statusText = "Not indexed";
-        let statsText = "";
-
-        try {
-          const { coordinator, db } = getCoordinator(worktree);
-          const stats = db.getStats();
-          const syncProgress = db.getSyncProgress();
-          db.close();
-
-          if (stats.total_chunks > 0) {
-            statusText = `Indexed (${stats.total_chunks} chunks, ${stats.files_indexed} files)`;
-            if (syncProgress.sync_status === "in_progress") {
-              const filesIndexed = db.getSyncState("files_indexed") || "0";
-              const totalFiles = db.getSyncState("total_files") || "0";
-              statusText = `Indexing in progress: ${filesIndexed}/${totalFiles} files`;
-            }
-          }
-        } catch {
-          // Database may not exist yet
-        }
-
+    "experimental.session.compacting": async (_input, output) => {
+      if (!isInitialized) {
         output.context.push(`## Beacon Index Status
+Not initialized - no git repository found
+Run 'git init' to enable Beacon indexing.`);
+        return;
+      }
+
+      let statusText = "Not indexed";
+      let pooled;
+      try {
+        pooled = await getCoordinator(worktree);
+        const stats = pooled.db.getStats();
+        const syncProgress = pooled.db.getSyncProgress();
+
+        if (stats.total_chunks > 0) {
+          statusText = `Indexed (${stats.total_chunks} chunks, ${stats.files_indexed} files)`;
+          if (syncProgress.sync_status === "in_progress") {
+            const filesIndexed = syncProgress.files_indexed || 0;
+            const totalFiles = syncProgress.total_files || 0;
+            statusText = `Indexing in progress: ${filesIndexed}/${totalFiles} files`;
+          }
+        }
+      } catch (error) {
+        console.error(`[Beacon] Error getting status:`, error);
+      } finally {
+        if (pooled) {
+          try {
+            await releaseCoordinator(worktree);
+          } catch {}
+        }
+      }
+
+      output.context.push(`## Beacon Index Status
 ${statusText}
 The Beacon search capability is available via the 'search' tool.`);
-      } catch (error: unknown) {
-        // Silently fail - don't block compaction
-        const errorMsg = error instanceof Error ? error.message : String(error);
-        await client.app.log({
-          body: {
-            service: "beacon",
-            level: "debug",
-            message: `Compaction context injection failed: ${errorMsg}`,
-          },
-        });
-      }
     },
 
-    // Shell environment hook - inject necessary variables
-    "shell.env": async (input, output) => {
+    "shell.env": async (_input, output) => {
       try {
-        // Ensure standard Beacon env vars are available
         output.env.BEACON_HOME = worktree;
-      } catch (error: unknown) {
-        // Silently fail - don't block shell execution
-      }
+      } catch {}
     },
   };
 };

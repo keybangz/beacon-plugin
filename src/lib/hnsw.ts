@@ -4,6 +4,40 @@ import { existsSync, mkdirSync, unlinkSync, readFileSync, writeFileSync } from "
 import { join, dirname } from "path";
 import type { SearchResult } from "./types.js";
 
+class AsyncMutex {
+  private locked = false;
+  private queue: Array<() => void> = [];
+
+  async acquire(): Promise<void> {
+    if (!this.locked) {
+      this.locked = true;
+      return;
+    }
+
+    return new Promise<void>((resolve) => {
+      this.queue.push(resolve);
+    });
+  }
+
+  release(): void {
+    const next = this.queue.shift();
+    if (next) {
+      next();
+    } else {
+      this.locked = false;
+    }
+  }
+
+  async runExclusive<T>(fn: () => Promise<T>): Promise<T> {
+    await this.acquire();
+    try {
+      return await fn();
+    } finally {
+      this.release();
+    }
+  }
+}
+
 export interface HNSWIndexConfig {
   dimensions: number;
   maxElements: number;
@@ -37,6 +71,7 @@ export class HNSWVectorIndex {
   private indexPath: string;
   private entriesPath: string;
   private isDirty: boolean = false;
+  private mutex = new AsyncMutex();
 
   constructor(dimensions: number, storagePath: string, config?: Partial<HNSWIndexConfig>) {
     this.config = { ...DEFAULT_CONFIG, dimensions, ...config };
@@ -103,33 +138,35 @@ export class HNSWVectorIndex {
     }
   }
 
-  addVector(chunkId: string, embedding: number[], entry: IndexEntry): void {
-    if (!this.index) {
-      this.initialize();
-    }
+  async addVector(chunkId: string, embedding: number[], entry: IndexEntry): Promise<void> {
+    return this.mutex.runExclusive(async () => {
+      if (!this.index) {
+        this.initialize();
+      }
 
-    if (this.idToInternal.has(chunkId)) {
-      this.updateVector(chunkId, embedding, entry);
-      return;
-    }
+      if (this.idToInternal.has(chunkId)) {
+        await this.updateVectorInternal(chunkId, embedding, entry);
+        return;
+      }
 
-    const internalId = this.nextInternalId++;
-    this.idToInternal.set(chunkId, internalId);
-    this.internalToId.set(internalId, chunkId);
-    this.entries.set(internalId, entry);
+      const internalId = this.nextInternalId++;
+      this.idToInternal.set(chunkId, internalId);
+      this.internalToId.set(internalId, chunkId);
+      this.entries.set(internalId, entry);
 
-    this.index!.addPoint(embedding, internalId);
-    this.isDirty = true;
+      this.index!.addPoint(embedding, internalId);
+      this.isDirty = true;
+    });
   }
 
-  updateVector(chunkId: string, embedding: number[], entry: IndexEntry): void {
+  private async updateVectorInternal(chunkId: string, embedding: number[], entry: IndexEntry): Promise<void> {
     if (!this.index) {
       this.initialize();
     }
 
     const internalId = this.idToInternal.get(chunkId);
     if (internalId === undefined) {
-      this.addVector(chunkId, embedding, entry);
+      await this.addVector(chunkId, embedding, entry);
       return;
     }
 
@@ -146,39 +183,56 @@ export class HNSWVectorIndex {
     this.isDirty = true;
   }
 
-  removeVector(chunkId: string): boolean {
-    if (!this.index) return false;
-
-    const internalId = this.idToInternal.get(chunkId);
-    if (internalId === undefined) return false;
-
-    this.index.markDelete(internalId);
-    this.idToInternal.delete(chunkId);
-    this.internalToId.delete(internalId);
-    this.entries.delete(internalId);
-    this.isDirty = true;
-
-    return true;
+  async updateVector(chunkId: string, embedding: number[], entry: IndexEntry): Promise<void> {
+    return this.mutex.runExclusive(() => this.updateVectorInternal(chunkId, embedding, entry));
   }
 
-  removeFile(filePath: string): number {
-    let removed = 0;
-    const toRemove: string[] = [];
+  async removeVector(chunkId: string): Promise<boolean> {
+    return this.mutex.runExclusive(async () => {
+      if (!this.index) return false;
 
-    for (const [chunkId, internalId] of this.idToInternal) {
-      const entry = this.entries.get(internalId);
-      if (entry && entry.filePath === filePath) {
-        toRemove.push(chunkId);
+      const internalId = this.idToInternal.get(chunkId);
+      if (internalId === undefined) return false;
+
+      this.index.markDelete(internalId);
+      this.idToInternal.delete(chunkId);
+      this.internalToId.delete(internalId);
+      this.entries.delete(internalId);
+      this.isDirty = true;
+
+      return true;
+    });
+  }
+
+  async removeFile(filePath: string): Promise<number> {
+    return this.mutex.runExclusive(async () => {
+      let removed = 0;
+      const toRemove: string[] = [];
+
+      for (const [chunkId, internalId] of this.idToInternal) {
+        const entry = this.entries.get(internalId);
+        if (entry && entry.filePath === filePath) {
+          toRemove.push(chunkId);
+        }
       }
-    }
 
-    for (const chunkId of toRemove) {
-      if (this.removeVector(chunkId)) {
-        removed++;
+      for (const chunkId of toRemove) {
+        const internalId = this.idToInternal.get(chunkId);
+        if (internalId !== undefined && this.index) {
+          this.index.markDelete(internalId);
+          this.idToInternal.delete(chunkId);
+          this.internalToId.delete(internalId);
+          this.entries.delete(internalId);
+          removed++;
+        }
       }
-    }
 
-    return removed;
+      if (removed > 0) {
+        this.isDirty = true;
+      }
+
+      return removed;
+    });
   }
 
   search(queryEmbedding: number[], topK: number): SearchResult[] {
@@ -237,17 +291,19 @@ export class HNSWVectorIndex {
     };
   }
 
-  clear(): void {
-    if (this.index) {
-      this.index = new HierarchicalNSW("cosine", this.config.dimensions);
-      this.index.initIndex(this.config.maxElements);
-      this.index.setEf(this.config.efSearch);
-    }
-    this.entries.clear();
-    this.idToInternal.clear();
-    this.internalToId.clear();
-    this.nextInternalId = 0;
-    this.isDirty = true;
+  async clear(): Promise<void> {
+    return this.mutex.runExclusive(async () => {
+      if (this.index) {
+        this.index = new HierarchicalNSW("cosine", this.config.dimensions);
+        this.index.initIndex(this.config.maxElements);
+        this.index.setEf(this.config.efSearch);
+      }
+      this.entries.clear();
+      this.idToInternal.clear();
+      this.internalToId.clear();
+      this.nextInternalId = 0;
+      this.isDirty = true;
+    });
   }
 
   close(): void {
@@ -265,28 +321,55 @@ export class HNSWVectorIndex {
   }
 }
 
-const activeIndexes = new Map<string, HNSWVectorIndex>();
+const activeIndexes = new Map<string, { index: HNSWVectorIndex; refCount: number }>();
 
 export function getOrCreateIndex(
   storagePath: string,
   dimensions: number,
   config?: Partial<HNSWIndexConfig>
 ): HNSWVectorIndex {
-  let index = activeIndexes.get(storagePath);
+  let entry = activeIndexes.get(storagePath);
 
-  if (!index) {
-    index = new HNSWVectorIndex(dimensions, storagePath, config);
+  if (!entry) {
+    const index = new HNSWVectorIndex(dimensions, storagePath, config);
     index.initialize();
-    activeIndexes.set(storagePath, index);
+    entry = { index, refCount: 0 };
+    activeIndexes.set(storagePath, entry);
   }
 
-  return index;
+  entry.refCount++;
+  return entry.index;
+}
+
+export function releaseIndex(storagePath: string): void {
+  const entry = activeIndexes.get(storagePath);
+  if (entry) {
+    entry.refCount--;
+    if (entry.refCount <= 0) {
+      entry.index.close();
+      activeIndexes.delete(storagePath);
+    }
+  }
 }
 
 export function closeIndex(storagePath: string): void {
-  const index = activeIndexes.get(storagePath);
-  if (index) {
-    index.close();
+  const entry = activeIndexes.get(storagePath);
+  if (entry) {
+    entry.index.close();
     activeIndexes.delete(storagePath);
   }
+}
+
+export function closeAllIndexes(): void {
+  for (const entry of activeIndexes.values()) {
+    entry.index.close();
+  }
+  activeIndexes.clear();
+}
+
+export function getIndexStats(): { count: number; paths: string[] } {
+  return {
+    count: activeIndexes.size,
+    paths: Array.from(activeIndexes.keys()),
+  };
 }

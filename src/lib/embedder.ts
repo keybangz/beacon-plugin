@@ -46,9 +46,37 @@ function simpleHash(str: string): number {
 
 export type EmbedderMode = "api" | "onnx" | "disabled";
 
+const DEFAULT_TIMEOUT_MS = 30000;
+const MAX_RETRIES = 3;
+const BASE_DELAY_MS = 1000;
+
+function getDelayWithJitter(attempt: number): number {
+  const baseDelay = BASE_DELAY_MS * Math.pow(2, attempt);
+  const jitter = baseDelay * 0.3 * Math.random();
+  return Math.min(baseDelay + jitter, 30000);
+}
+
+async function fetchWithTimeout(
+  url: string,
+  options: RequestInit,
+  timeoutMs: number
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+    return response;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 export class Embedder {
   private config: EmbeddingConfig;
-  private retryDelays: number[] = [1000, 4000, 8000];
   private queryCache = new QueryEmbeddingCache(256);
   private contextLimit: number;
   private enabled: boolean;
@@ -56,12 +84,14 @@ export class Embedder {
   private pendingRequests: Map<number, Promise<number[]>> = new Map();
   private onnxEmbedder: ONNXEmbedder | null = null;
   private storagePath: string | null = null;
+  private timeoutMs: number;
 
   constructor(config: EmbeddingConfig, contextLimit?: number, storagePath?: string) {
     this.config = config;
     this.contextLimit = contextLimit ?? config.context_limit ?? 256;
     this.enabled = config.enabled !== false;
     this.storagePath = storagePath ?? null;
+    this.timeoutMs = (config as any).timeout_ms ?? DEFAULT_TIMEOUT_MS;
     
     if (this.config.api_base === "local" || this.config.api_base === "onnx") {
       this.mode = "onnx";
@@ -277,14 +307,14 @@ export class Embedder {
     
     let lastError: Error | null = null;
 
-    for (let attempt = 0; attempt <= this.retryDelays.length; attempt++) {
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
       try {
         return await this.performSingleEmbedding(truncated);
       } catch (error: unknown) {
         lastError = error instanceof Error ? error : new Error("Unknown embedding error");
 
-        if (attempt < this.retryDelays.length) {
-          const delay: number = this.retryDelays[attempt];
+        if (attempt < MAX_RETRIES - 1) {
+          const delay = getDelayWithJitter(attempt);
           await new Promise((resolve) => setTimeout(resolve, delay));
         }
       }
@@ -296,7 +326,7 @@ export class Embedder {
   private async embedBatchWithRetry(documents: string[]): Promise<number[][]> {
     let lastError: Error | null = null;
 
-    for (let attempt = 0; attempt <= this.retryDelays.length; attempt++) {
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
       try {
         return await this.performBatchEmbedding(documents);
       } catch (error: unknown) {
@@ -305,8 +335,8 @@ export class Embedder {
             ? error
             : new Error("Unknown embedding error");
 
-        if (attempt < this.retryDelays.length) {
-          const delay: number = this.retryDelays[attempt];
+        if (attempt < MAX_RETRIES - 1) {
+          const delay = getDelayWithJitter(attempt);
           await new Promise((resolve) => setTimeout(resolve, delay));
         }
       }
@@ -341,11 +371,23 @@ export class Embedder {
       input: text,
     };
 
-    const response = await fetch(`${this.config.api_base}/embeddings`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(body),
-    });
+    let response: Response;
+    try {
+      response = await fetchWithTimeout(
+        `${this.config.api_base}/embeddings`,
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify(body),
+        },
+        this.timeoutMs
+      );
+    } catch (error: unknown) {
+      if (error instanceof Error && error.name === "AbortError") {
+        throw new Error(`Embedding request timed out after ${this.timeoutMs}ms`);
+      }
+      throw error;
+    }
 
     if (!response.ok) {
       const errorText: string = await response.text().catch(() => "");
@@ -381,11 +423,23 @@ export class Embedder {
       input: documents,
     };
 
-    const response = await fetch(`${this.config.api_base}/embeddings`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(body),
-    });
+    let response: Response;
+    try {
+      response = await fetchWithTimeout(
+        `${this.config.api_base}/embeddings`,
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify(body),
+        },
+        this.timeoutMs
+      );
+    } catch (error: unknown) {
+      if (error instanceof Error && error.name === "AbortError") {
+        throw new Error(`Embedding request timed out after ${this.timeoutMs}ms`);
+      }
+      throw error;
+    }
 
     if (!response.ok) {
       const errorText: string = await response.text().catch(() => "");
