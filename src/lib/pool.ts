@@ -17,40 +17,15 @@ export interface PooledResources {
 
 interface PoolEntry {
   resources: PooledResources;
-  mutex: Promise<void>;
-  resolve: (() => void) | null;
-}
-
-class SimpleMutex {
-  private queue: (() => void)[] = [];
-  private locked = false;
-
-  async acquire(): Promise<() => void> {
-    if (!this.locked) {
-      this.locked = true;
-      return () => this.release();
-    }
-
-    return new Promise<() => void>((resolve) => {
-      this.queue.push(resolve);
-    });
-  }
-
-  private release(): void {
-    if (this.queue.length > 0) {
-      const next = this.queue.shift()!;
-      next();
-    } else {
-      this.locked = false;
-    }
-  }
+  acquiring: Promise<void>;
 }
 
 class ConnectionPool {
   private pools: Map<string, PoolEntry> = new Map();
   private cleanupInterval: ReturnType<typeof setInterval> | null = null;
   private readonly IDLE_TIMEOUT_MS = 60000;
-  private globalMutex = new SimpleMutex();
+  private globalLock: Promise<void> = Promise.resolve();
+  private resolveGlobalLock: (() => void) | null = null;
 
   constructor() {
     this.startCleanupTimer();
@@ -65,21 +40,36 @@ class ConnectionPool {
     }, 30000);
   }
 
+  private async getGlobalLock(): Promise<() => void> {
+    while (true) {
+      if (this.resolveGlobalLock === null) {
+        // Acquire lock
+        const resolve = () => {
+          this.resolveGlobalLock = null;
+          if (this.resolveGlobalLock === resolve) {
+            const next = this.resolveGlobalLock;
+            if (next) next();
+          }
+        };
+        this.resolveGlobalLock = resolve;
+        return resolve;
+      }
+      // Wait for current lock holder
+      await this.globalLock;
+    }
+  }
+
   private async cleanupIdle(): Promise<void> {
     const now = Date.now();
-    const release = await this.globalMutex.acquire();
+    const release = await this.getGlobalLock();
     
-    const entries = Array.from(this.pools.entries());
-    const cleanupPromises: Promise<void>[] = [];
-
-    for (const [repoRoot, entry] of entries) {
-      cleanupPromises.push((async () => {
-        // Wait for entry mutex
-        const entryRelease = entry.mutex;
-        try {
-          await entryRelease;
-        } catch {}
-
+    try {
+      const entries = Array.from(this.pools.entries());
+      
+      for (const [repoRoot, entry] of entries) {
+        // Wait for entry to be available
+        await entry.acquiring;
+        
         const resources = entry.resources;
         if (
           resources.refCount === 0 &&
@@ -92,11 +82,10 @@ class ConnectionPool {
             // Silently handle cleanup errors
           }
         }
-      })());
+      }
+    } finally {
+      release();
     }
-
-    await Promise.allSettled(cleanupPromises);
-    release();
   }
 
   async acquire(worktree: string): Promise<PooledResources> {
@@ -106,13 +95,13 @@ class ConnectionPool {
     }
 
     // Global lock to prevent race conditions
-    const globalRelease = await this.globalMutex.acquire();
+    const release = await this.getGlobalLock();
     
     try {
       let entry = this.pools.get(repoRoot);
       
       if (!entry) {
-        // Create new resources
+        // Create new resources immediately
         const config = loadConfig(repoRoot);
         const storagePath = join(repoRoot, config.storage.path);
         const dbPath = join(storagePath, "embeddings.db");
@@ -132,47 +121,26 @@ class ConnectionPool {
           lastAccessed: Date.now(),
         };
 
-        // Create immediate resolved promise for the mutex
-        let mutexResolve: () => void;
-        const mutexPromise = new Promise<void>((resolve) => {
-          mutexResolve = resolve;
-        });
-        mutexResolve!();
-
+        // Entry with immediate resolved promise
         entry = {
           resources,
-          mutex: mutexPromise,
-          resolve: mutexResolve,
+          acquiring: Promise.resolve(),
         };
 
         this.pools.set(repoRoot, entry);
       } else {
-        // Wait for entry lock then update
-        await entry.mutex;
+        // Wait for any pending operations on this entry
+        await entry.acquiring;
         
-        // Create new mutex for this update
-        let mutexResolve: () => void;
-        const mutexPromise = new Promise<void>((resolve) => {
-          mutexResolve = resolve;
-        });
-        entry.mutex = mutexPromise;
-        entry.resolve = mutexResolve;
-
-        // Update
+        // Update with new completed promise
         entry.resources.refCount++;
         entry.resources.lastAccessed = Date.now();
-
-        // Release immediately
-        if (entry.resolve) {
-          entry.resolve();
-        }
+        entry.acquiring = Promise.resolve();
       }
 
-      globalRelease();
       return entry.resources;
-    } catch (error) {
-      globalRelease();
-      throw error;
+    } finally {
+      release();
     }
   }
 
@@ -180,39 +148,23 @@ class ConnectionPool {
     const repoRoot = findRepoRoot(worktree);
     if (!repoRoot) return;
 
-    const globalRelease = await this.globalMutex.acquire();
+    const release = await this.getGlobalLock();
     
     try {
       const entry = this.pools.get(repoRoot);
-      if (!entry) {
-        globalRelease();
-        return;
-      }
+      if (!entry) return;
 
-      // Wait for entry lock
-      await entry.mutex;
+      // Wait for entry to be available
+      await entry.acquiring;
       
-      // Create new mutex for update
-      let mutexResolve: () => void;
-      const mutexPromise = new Promise<void>((resolve) => {
-        mutexResolve = resolve;
-      });
-      entry.mutex = mutexPromise;
-      entry.resolve = mutexResolve;
-
       // Update
       entry.resources.refCount = Math.max(0, entry.resources.refCount - 1);
       entry.resources.lastAccessed = Date.now();
-
-      // Release
-      if (entry.resolve) {
-        entry.resolve();
-      }
-
-      globalRelease();
-    } catch (error) {
-      globalRelease();
-      throw error;
+      
+      // Set promise for next operation
+      entry.acquiring = Promise.resolve();
+    } finally {
+      release();
     }
   }
 
@@ -220,43 +172,36 @@ class ConnectionPool {
     const repoRoot = findRepoRoot(worktree);
     if (!repoRoot) return undefined;
     
-    const entry = this.pools.get(repoRoot);
-    return entry?.resources;
+    return this.pools.get(repoRoot)?.resources;
   }
 
   async close(worktree: string): Promise<void> {
     const repoRoot = findRepoRoot(worktree);
     if (!repoRoot) return;
 
-    const globalRelease = await this.globalMutex.acquire();
+    const release = await this.getGlobalLock();
     
     try {
       const entry = this.pools.get(repoRoot);
-      if (!entry) {
-        globalRelease();
-        return;
-      }
+      if (!entry) return;
 
-      await entry.mutex;
+      await entry.acquiring;
       
       entry.resources.db.close();
       this.pools.delete(repoRoot);
-      
-      globalRelease();
-    } catch (error) {
-      globalRelease();
-      // Ignore errors in close
+    } finally {
+      release();
     }
   }
 
   async closeAll(): Promise<void> {
-    const globalRelease = await this.globalMutex.acquire();
+    const release = await this.getGlobalLock();
     
     try {
       const entries = Array.from(this.pools.entries());
       
       for (const [repoRoot, entry] of entries) {
-        await entry.mutex;
+        await entry.acquiring;
         try {
           entry.resources.db.close();
         } catch {}
@@ -268,10 +213,8 @@ class ConnectionPool {
         clearInterval(this.cleanupInterval);
         this.cleanupInterval = null;
       }
-      
-      globalRelease();
-    } catch (error) {
-      globalRelease();
+    } finally {
+      release();
     }
   }
 
