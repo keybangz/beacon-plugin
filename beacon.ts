@@ -149,23 +149,26 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
   function isGrepCodeSearch(command: string): boolean {
     // Don't interfere with git grep
     if (command.includes("git grep")) return false;
-    
+
     // Don't interfere with pipes to grep
     if (/\|\s*grep/.test(command)) return false;
-    
+
     // Don't interfere with output redirection
     if (command.includes(">")) return false;
-    
+
     // Check for explicit file extensions or context
-    const hasFileExtension = /\.(ts|tsx|js|jsx|py|go|rs|java|rb|php|sql|md)$/m.test(command);
-    const hasQueryNoFile = /^[^>]*grep\s+[^|]*['"][^'"]+['"][^|]*$/m.test(command);
-    
+    const hasFileExtension =
+      /\.(ts|tsx|js|jsx|py|go|rs|java|rb|php|sql|md)$/m.test(command);
+    const hasQueryNoFile = /^[^>]*grep\s+[^|]*['"][^'"]+['"][^|]*$/m.test(
+      command,
+    );
+
     // Avoid false positives for file operations
     if (command.includes("-l") && !hasFileExtension) {
       // List-only mode, likely checking for existence
       return false;
     }
-    
+
     return hasFileExtension || hasQueryNoFile;
   }
 
@@ -177,17 +180,17 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
   async function performAutoIndex(sessionID?: string): Promise<void> {
     if (!isInitialized || !config) return;
     if (!config.indexing.auto_index) return;
-    
+
     const pooled = await getCoordinator(worktree);
     const stats = pooled.db.getStats();
-    
+
     if (stats.total_chunks > 0) {
       await releaseCoordinator(worktree);
       return;
     }
 
     const lastMilestone = { percent: 0, phase: "" };
-    
+
     if (sessionID) {
       await pooled.coordinator.performFullIndex(async (progress) => {
         if (shouldShowProgress(progress, lastMilestone)) {
@@ -211,7 +214,7 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
           }
         }
       });
-      
+
       await client.session.prompt({
         path: { id: sessionID },
         body: {
@@ -230,7 +233,7 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
       // Silent indexing for plugin init
       await pooled.coordinator.performFullIndex();
     }
-    
+
     await releaseCoordinator(worktree);
   }
 
@@ -266,7 +269,10 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
             try {
               await releaseCoordinator(worktree);
             } catch (releaseError) {
-              console.error(`[Beacon] Failed to release coordinator for ${filePath}:`, releaseError);
+              console.error(
+                `[Beacon] Failed to release coordinator for ${filePath}:`,
+                releaseError,
+              );
             }
           }
         }
@@ -284,7 +290,10 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
             try {
               await releaseCoordinator(worktree);
             } catch (releaseError) {
-              console.error(`[Beacon] Failed to release coordinator for ${filePath}:`, releaseError);
+              console.error(
+                `[Beacon] Failed to release coordinator for ${filePath}:`,
+                releaseError,
+              );
             }
           }
         }
@@ -303,7 +312,10 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
             try {
               await releaseCoordinator(worktree);
             } catch (releaseError) {
-              console.error(`[Beacon] Failed to release coordinator for ${filePath}:`, releaseError);
+              console.error(
+                `[Beacon] Failed to release coordinator for ${filePath}:`,
+                releaseError,
+              );
             }
           }
         }
@@ -352,19 +364,25 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
           try {
             await performAutoIndex(sessionID);
           } catch (error) {
-            console.error(`[Beacon] Auto-indexing failed in session.created:`, error);
+            console.error(
+              `[Beacon] Auto-indexing failed in session.created:`,
+              error,
+            );
           }
         } else {
           // Check if indexing is needed and show status
           const pooled = await getCoordinator(worktree);
           const stats = pooled.db.getStats();
-          
+
           if (stats.total_chunks === 0 && config?.indexing.auto_index) {
             await releaseCoordinator(worktree);
             try {
               await performAutoIndex(sessionID);
             } catch (error) {
-              console.error(`[Beacon] Auto-indexing failed in session.created:`, error);
+              console.error(
+                `[Beacon] Auto-indexing failed in session.created:`,
+                error,
+              );
             }
           } else {
             await releaseCoordinator(worktree);
@@ -395,29 +413,31 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
       if (!/\bgrep\b/.test(command) || command.includes("git grep")) return;
 
       // Check if this is a code search pattern (file extensions or no explicit file)
-      const isLikelyCodeSearch = 
-        !command.includes(">") && 
+      const isLikelyCodeSearch =
+        !command.includes(">") &&
         !/\|\s*grep/.test(command) &&
-        (/\.(ts|tsx|js|jsx|py|go|rs|java|rb|php|sql|md)$/m.test(command) || 
-         /^[^>]*grep\s+[^|]*['"][^'"]+['"][^|]*$/m.test(command));
+        (/\.(ts|tsx|js|jsx|py|go|rs|java|rb|php|sql|md)$/m.test(command) ||
+          /^[^>]*grep\s+[^|]*['"][^'"]+['"][^|]*$/m.test(command));
 
       if (isLikelyCodeSearch) {
-        const grepMatch = command.match(/grep\s+(?:-[a-zA-Z]+\s+)*["']([^"']+)["']/);
+        const grepMatch = command.match(
+          /grep\s+(?:-[a-zA-Z]+\s+)*["']([^"']+)["']/,
+        );
         const query = grepMatch?.[1];
 
         if (query && query.length > 2) {
           // Log a suggestion but don't block execution
-          console.warn(
-            `💡 Beacon Tip: For code searches, consider using the 'search' tool:\n` +
-            `   search(query="${query}")\n` +
-            `   (This provides semantic matching and better results)\n` +
-            `   Proceeding with grep as requested...`
-          );
+          // console.warn(
+          //  `💡 Beacon Tip: For code searches, consider using the 'search' tool:\n` +
+          //  `   search(query="${query}")\n` +
+          //  `   (This provides semantic matching and better results)\n` +
+          //  `   Proceeding with grep as requested...`
+          // );
           // Don't throw - allow execution to continue
           return;
         }
       }
-      
+
       // For pipeline operations, file searches, or explicit non-code use cases, allow grep
       // No warning needed - grep is appropriate here
     },
@@ -432,11 +452,11 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
           // Reset state to allow re-detection of git repo
           isInitialized = false;
           hasAttemptedAutoIndex = false;
-          
+
           // Retry with exponential backoff
           const maxRetries = 5;
           for (let i = 0; i < maxRetries; i++) {
-            await new Promise(resolve => setTimeout(resolve, 100 * (i + 1)));
+            await new Promise((resolve) => setTimeout(resolve, 100 * (i + 1)));
             const success = await initializePlugin();
             if (success) {
               // Immediately perform auto-indexing for the newly detected repo
@@ -461,13 +481,19 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
             pooled = await getCoordinator(worktree);
             await pooled.coordinator.reembedFile(filePath);
           } catch (error) {
-            console.error(`[Beacon] Error reembedding file ${filePath}:`, error);
+            console.error(
+              `[Beacon] Error reembedding file ${filePath}:`,
+              error,
+            );
           } finally {
             if (pooled) {
               try {
                 await releaseCoordinator(worktree);
               } catch (releaseError) {
-                console.error(`[Beacon] Failed to release coordinator for ${filePath}:`, releaseError);
+                console.error(
+                  `[Beacon] Failed to release coordinator for ${filePath}:`,
+                  releaseError,
+                );
               }
             }
           }
@@ -490,7 +516,10 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
               try {
                 await releaseCoordinator(worktree);
               } catch (releaseError) {
-                console.error(`[Beacon] Failed to release coordinator:`, releaseError);
+                console.error(
+                  `[Beacon] Failed to release coordinator:`,
+                  releaseError,
+                );
               }
             }
           }
