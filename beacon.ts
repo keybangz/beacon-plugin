@@ -12,6 +12,7 @@ import DownloadModelTool from "./src/tools/download-model.js";
 import { findRepoRoot } from "./src/lib/repo-root.js";
 import { loadConfig } from "./src/lib/config.js";
 import { getOrCreateWatcher } from "./src/lib/watcher.js";
+import type { FileWatcher } from "./src/lib/watcher.js";
 import { getCoordinator, releaseCoordinator } from "./src/lib/pool.js";
 import type { IndexProgress } from "./src/lib/sync.js";
 
@@ -108,7 +109,7 @@ function shouldShowProgress(
 export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
   let repoRoot: string | null = null;
   let config: ReturnType<typeof loadConfig> | null = null;
-  let fileWatcher: ReturnType<typeof getOrCreateWatcher> | null = null;
+  let fileWatcher: FileWatcher | null = null;
   let isInitialized = false;
   let hasAttemptedAutoIndex = false;
 
@@ -213,7 +214,7 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
     try {
       repoRoot = detectedRoot;
       config = loadConfig(repoRoot);
-      fileWatcher = await getOrCreateWatcher(repoRoot, config);
+      fileWatcher = (await getOrCreateWatcher(repoRoot, config)) as FileWatcher;
 
       fileWatcher.on("add", async (filePath: string) => {
         let pooled;
