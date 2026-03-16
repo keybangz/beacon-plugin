@@ -67,7 +67,8 @@ export class FileWatcher extends EventEmitter {
       this.watcher = null;
     }
 
-    for (const timer of this.debounceTimers.values()) {
+    // Clear all debounce timers
+    for (const [filePath, timer] of this.debounceTimers) {
       clearTimeout(timer);
     }
     this.debounceTimers.clear();
@@ -83,15 +84,31 @@ export class FileWatcher extends EventEmitter {
       return;
     }
 
+    // Clear existing timer for this file
     const existingTimer = this.debounceTimers.get(filePath);
     if (existingTimer) {
       clearTimeout(existingTimer);
     }
 
+    // Create new debounce timer
     const timer = setTimeout(() => {
       this.debounceTimers.delete(filePath);
-      this.emit(event, filePath);
+      // Only emit if watcher is still active
+      if (this.isRunning) {
+        this.emit(event, filePath);
+      }
     }, this.debounceMs);
+
+    // Prevent timer map from growing unbounded
+    if (this.debounceTimers.size > 1000) {
+      // Emergency cleanup: clear oldest entries
+      const entries = Array.from(this.debounceTimers.entries());
+      for (let i = 0; i < 100 && i < entries.length; i++) {
+        const [oldFilePath, oldTimer] = entries[i];
+        clearTimeout(oldTimer);
+        this.debounceTimers.delete(oldFilePath);
+      }
+    }
 
     this.debounceTimers.set(filePath, timer);
   }
@@ -102,38 +119,113 @@ export class FileWatcher extends EventEmitter {
     }
 
     return new Promise((resolve) => {
-      this.watcher!.on("ready", () => resolve());
+      const readyHandler = () => {
+        this.watcher?.off("ready", readyHandler);
+        resolve();
+      };
+      this.watcher!.on("ready", readyHandler);
     });
   }
 }
 
-const activeWatchers = new Map<string, FileWatcher>();
+const activeWatchers = new Map<string, { watcher: FileWatcher; refCount: number }>();
+const watcherMutexLock = { locked: false, queue: [] as (() => void)[] };
 
-export function getOrCreateWatcher(
+async function acquireWatcherLock(): Promise<() => void> {
+  if (!watcherMutexLock.locked) {
+    watcherMutexLock.locked = true;
+    return () => {
+      watcherMutexLock.locked = false;
+      if (watcherMutexLock.queue.length > 0) {
+        const next = watcherMutexLock.queue.shift()!;
+        next();
+      }
+    };
+  }
+
+  return new Promise<() => void>((resolve) => {
+    watcherMutexLock.queue.push(() => {
+      watcherMutexLock.locked = true;
+      resolve(() => {
+        watcherMutexLock.locked = false;
+        if (watcherMutexLock.queue.length > 0) {
+          const next = watcherMutexLock.queue.shift()!;
+          next();
+        }
+      });
+    });
+  });
+}
+
+export async function getOrCreateWatcher(
   repoRoot: string,
   config: BeaconConfig
-): FileWatcher {
-  let watcher = activeWatchers.get(repoRoot);
+): Promise<FileWatcher> {
+  const release = await acquireWatcherLock();
+  
+  try {
+    let entry = activeWatchers.get(repoRoot);
 
-  if (!watcher) {
-    watcher = new FileWatcher(repoRoot, config);
-    activeWatchers.set(repoRoot, watcher);
+    if (!entry) {
+      const watcher = new FileWatcher(repoRoot, config);
+      entry = { watcher, refCount: 0 };
+      activeWatchers.set(repoRoot, entry);
+    }
+
+    entry.refCount++;
+    return entry.watcher;
+  } finally {
+    release();
   }
-
-  return watcher;
 }
 
-export function stopWatcher(repoRoot: string): void {
-  const watcher = activeWatchers.get(repoRoot);
-  if (watcher) {
-    watcher.stop();
-    activeWatchers.delete(repoRoot);
+export async function releaseWatcher(repoRoot: string): Promise<void> {
+  const release = await acquireWatcherLock();
+  
+  try {
+    const entry = activeWatchers.get(repoRoot);
+    if (entry) {
+      entry.refCount--;
+      if (entry.refCount <= 0) {
+        entry.watcher.stop();
+        activeWatchers.delete(repoRoot);
+      }
+    }
+  } finally {
+    release();
   }
 }
 
-export function stopAllWatchers(): void {
-  for (const watcher of activeWatchers.values()) {
-    watcher.stop();
+export async function stopWatcher(repoRoot: string): Promise<void> {
+  const release = await acquireWatcherLock();
+  
+  try {
+    const entry = activeWatchers.get(repoRoot);
+    if (entry) {
+      entry.watcher.stop();
+      activeWatchers.delete(repoRoot);
+    }
+  } finally {
+    release();
   }
-  activeWatchers.clear();
+}
+
+export async function stopAllWatchers(): Promise<void> {
+  const release = await acquireWatcherLock();
+  
+  try {
+    for (const entry of activeWatchers.values()) {
+      entry.watcher.stop();
+    }
+    activeWatchers.clear();
+  } finally {
+    release();
+  }
+}
+
+export function getWatcherStats(): { count: number; repos: string[] } {
+  return {
+    count: activeWatchers.size,
+    repos: Array.from(activeWatchers.keys()),
+  };
 }

@@ -1,3 +1,5 @@
+import { simpleHash } from "./hash.js";
+
 const IDENTIFIER_PATTERNS = [
   /\b(?:function|class|const|let|var|async|static)\s+([a-zA-Z_$][a-zA-Z0-9_$]*)/g,
   /import\s+(?:\{[^}]*\}|\*\s+as\s+[a-zA-Z_$][a-zA-Z0-9_$]*|[a-zA-Z_$][a-zA-Z0-9_$]*)/g,
@@ -38,8 +40,20 @@ const CODE_SYNONYMS: Record<string, string[]> = {
 const identifierCache = new Map<string, Set<string>>();
 const IDENTIFIER_CACHE_MAX = 500;
 
+function generateCacheKey(code: string): string {
+  if (code.length <= 1000) {
+    return code;
+  }
+  
+  const hash = simpleHash(code);
+  const midPoint = Math.floor(code.length / 2);
+  const midStart = Math.max(0, midPoint - 25);
+  const midEnd = Math.min(code.length, midPoint + 25);
+  return `${code.length}:${hash}:${code.slice(0, 30)}:${code.slice(midStart, midEnd)}:${code.slice(-30)}`;
+}
+
 export function extractIdentifiers(code: string): Set<string> {
-  const cacheKey = code.length > 1000 ? `${code.length}:${code.slice(0, 100)}:${code.slice(-100)}` : code;
+  const cacheKey = generateCacheKey(code);
   
   const cached = identifierCache.get(cacheKey);
   if (cached) return cached;
