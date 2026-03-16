@@ -227,7 +227,9 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
           if (pooled) {
             try {
               await releaseCoordinator(worktree);
-            } catch {}
+            } catch (releaseError) {
+              console.error(`[Beacon] Failed to release coordinator for ${filePath}:`, releaseError);
+            }
           }
         }
       });
@@ -243,7 +245,9 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
           if (pooled) {
             try {
               await releaseCoordinator(worktree);
-            } catch {}
+            } catch (releaseError) {
+              console.error(`[Beacon] Failed to release coordinator for ${filePath}:`, releaseError);
+            }
           }
         }
       });
@@ -260,7 +264,9 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
           if (pooled) {
             try {
               await releaseCoordinator(worktree);
-            } catch {}
+            } catch (releaseError) {
+              console.error(`[Beacon] Failed to release coordinator for ${filePath}:`, releaseError);
+            }
           }
         }
       });

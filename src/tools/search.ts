@@ -94,15 +94,25 @@ export default tool({
           );
         } catch (embedError: unknown) {
           const embedErrorMsg = embedError instanceof Error ? embedError.message : String(embedError);
-          results = db.ftsOnlySearch(
-            args.query,
-            args.topK ?? 10,
-            args.pathPrefix
-          );
+          
+          let ftsResults;
+          try {
+            ftsResults = db.ftsOnlySearch(
+              args.query,
+              args.topK ?? 10,
+              args.pathPrefix
+            );
+          } catch (ftsError: unknown) {
+            const ftsErrorMsg = ftsError instanceof Error ? ftsError.message : String(ftsError);
+            return JSON.stringify({
+              error: `Search failed: embedding unavailable (${embedErrorMsg}) and keyword search failed (${ftsErrorMsg})`,
+              matches: [],
+            });
+          }
           
           return JSON.stringify({
             warning: `Embedding server unavailable (${embedErrorMsg}), using keyword search`,
-            matches: results.map((r) => ({
+            matches: ftsResults.map((r) => ({
               file: r.filePath,
               lines: `${r.startLine}-${r.endLine}`,
               similarity: r.similarity.toFixed(3),

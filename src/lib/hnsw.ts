@@ -133,7 +133,8 @@ export class HNSWVectorIndex {
       
       writeFileSync(this.entriesPath, JSON.stringify(data));
       this.isDirty = false;
-    } catch {
+    } catch (error) {
+      console.error(`[HNSW] Failed to save index to disk:`, error);
       throw new Error("Failed to save HNSW index to disk");
     }
   }

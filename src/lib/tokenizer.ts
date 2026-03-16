@@ -38,8 +38,25 @@ const CODE_SYNONYMS: Record<string, string[]> = {
 const identifierCache = new Map<string, Set<string>>();
 const IDENTIFIER_CACHE_MAX = 500;
 
+function generateCacheKey(code: string): string {
+  if (code.length <= 1000) {
+    return code;
+  }
+  
+  const hash = simpleHash(code);
+  return `${code.length}:${hash}:${code.slice(0, 50)}:${code.slice(-50)}`;
+}
+
+function simpleHash(str: string): number {
+  let hash = 5381;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) + hash) + str.charCodeAt(i);
+  }
+  return hash >>> 0;
+}
+
 export function extractIdentifiers(code: string): Set<string> {
-  const cacheKey = code.length > 1000 ? `${code.length}:${code.slice(0, 100)}:${code.slice(-100)}` : code;
+  const cacheKey = generateCacheKey(code);
   
   const cached = identifierCache.get(cacheKey);
   if (cached) return cached;

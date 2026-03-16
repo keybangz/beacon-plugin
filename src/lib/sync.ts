@@ -461,9 +461,15 @@ export class IndexCoordinator {
         });
       }
 
-      await Promise.all(
-        batchGroup.map((batch) => processFileBatch(batch.files, batch.startFileIdx))
-      );
+      try {
+        await Promise.all(
+          batchGroup.map((batch) => processFileBatch(batch.files, batch.startFileIdx))
+        );
+      } catch (error) {
+        console.error(`[Beacon] Batch embedding failed:`, error);
+        fileChunkEmbeddings.clear();
+        throw error;
+      }
 
       const percent = 30 + Math.round((globalChunksProcessed / totalChunks) * 50);
       await this.emitProgress({
@@ -505,7 +511,7 @@ export class IndexCoordinator {
           filesProcessed++;
           this.db.setSyncState("files_indexed", String(filesProcessed));
 
-          const percent = 80 + Math.round((filesProcessed / chunkedFiles.length) * 20);
+          const percent = Math.min(100, 80 + Math.round((filesProcessed / chunkedFiles.length) * 20));
           await this.emitProgress({
             phase: "storing",
             filesTotal: chunkedFiles.length,

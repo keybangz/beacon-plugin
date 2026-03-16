@@ -41,20 +41,30 @@ class ConnectionPool {
   }
 
   private async getGlobalLock(): Promise<() => void> {
+    let myResolve: (() => void) | null = null;
+    
     while (true) {
       if (this.resolveGlobalLock === null) {
-        // Acquire lock
-        const resolve = () => {
+        const currentLock = this.globalLock;
+        let nextPromiseResolve: (() => void) | null = null;
+        
+        myResolve = () => {
           this.resolveGlobalLock = null;
-          if (this.resolveGlobalLock === resolve) {
-            const next = this.resolveGlobalLock;
-            if (next) next();
+          this.globalLock = Promise.resolve();
+          if (nextPromiseResolve) {
+            nextPromiseResolve();
           }
         };
-        this.resolveGlobalLock = resolve;
-        return resolve;
+        
+        this.resolveGlobalLock = myResolve;
+        this.globalLock = new Promise((resolve) => {
+          nextPromiseResolve = resolve;
+        });
+        
+        await currentLock;
+        return myResolve;
       }
-      // Wait for current lock holder
+      
       await this.globalLock;
     }
   }
