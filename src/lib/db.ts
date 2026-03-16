@@ -381,13 +381,18 @@ export class BeaconDatabase {
       deleteChunks.run(filePath);
       deleteFts.run(filePath);
 
+      const identifiersList: string[] = [];
       for (let i = 0; i < chunks.length; i++) {
         const chunk = chunks[i];
         const embedding = embeddings[i];
-        const identifiers = Array.from(extractIdentifiers(chunk.text)).join(
-          " ",
+        identifiersList.push(
+          Array.from(extractIdentifiers(chunk.text)).join(" ")
         );
+      }
 
+      for (let i = 0; i < chunks.length; i++) {
+        const chunk = chunks[i];
+        const embedding = embeddings[i];
         insertChunk.run(
           filePath,
           i,
@@ -396,11 +401,13 @@ export class BeaconDatabase {
           chunk.end_line,
           embeddingToBuffer(embedding),
           fileHash,
-          identifiers,
+          identifiersList[i],
         );
+      }
 
-        const chunkId = (lastInsertId.get() as { id: number }).id;
-        insertFts.run(chunkId, filePath, chunk.text, identifiers);
+      const startId = (lastInsertId.get() as { id: number }).id;
+      for (let i = 0; i < chunks.length; i++) {
+        insertFts.run(startId + i, filePath, chunks[i].text, identifiersList[i]);
       }
     });
 
@@ -952,6 +959,7 @@ export class BeaconDatabase {
     // Calculate hybrid scores using RRF
     const queryIdentifiers = extractIdentifiers(query);
     const k = 60; // RRF constant
+    const identifierCache = new Map<string, ReturnType<typeof extractIdentifiers>>();
 
     for (const [, result] of combined) {
       let rffScore = 0;
@@ -963,10 +971,14 @@ export class BeaconDatabase {
         rffScore += 1 / (k + result.ranks.bm25);
       }
 
-      // Calculate identifier boost
-      const chunkIdentifiers = extractIdentifiers(result.chunkText);
+      // Calculate identifier boost with caching
+      let chunkIdentifiers = identifierCache.get(result.filePath);
+      if (!chunkIdentifiers) {
+        chunkIdentifiers = extractIdentifiers(result.chunkText);
+        identifierCache.set(result.filePath, chunkIdentifiers);
+      }
       const identifierMatches = Array.from(queryIdentifiers).filter((id) =>
-        chunkIdentifiers.has(id),
+        chunkIdentifiers!.has(id),
       ).length;
       const identifierBoost = getIdentifierBoost(
         identifierMatches,

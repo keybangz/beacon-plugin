@@ -323,58 +323,72 @@ export class IndexCoordinator {
       message: `Reading and chunking ${totalFilePaths} files...`,
     });
 
-    for (let i = 0; i < filePaths.length; i++) {
+    const FILE_BATCH_SIZE = 50;
+    for (let batchStart = 0; batchStart < filePaths.length; batchStart += FILE_BATCH_SIZE) {
       if (shouldTerminate(this.db)) {
         throw Object.assign(new Error("Indexing terminated by user"), { name: "AbortError" });
       }
 
-      if (i % YIELD_INTERVAL === 0) {
-        await new Promise((resolve) => setImmediate(resolve));
+      const batchEnd = Math.min(batchStart + FILE_BATCH_SIZE, filePaths.length);
+      const batchResults = await Promise.all(
+        filePaths.slice(batchStart, batchEnd).map(async (filePath): Promise<{path: string, hash: string, chunks: Array<{text: string, start_line: number, end_line: number}>} | null> => {
+          try {
+            const fullPath = join(this.repoRoot, filePath);
+            const stat = await statAsync(fullPath);
+            
+            if (stat.size / 1024 > maxFileSizeKb) {
+              return null;
+            }
+
+            const content = await readFileAsync(fullPath, "utf-8");
+            const hash = getFileHash(content);
+            const storedHash = this.db.getFileHash(filePath);
+            
+            if (storedHash === hash) {
+              return null;
+            }
+
+            const chunks = chunkCode(content, maxTokens, overlapTokens, contextLimit);
+            if (chunks.length > 0) {
+              return {
+                path: filePath,
+                hash,
+                chunks: chunks.map((c) => ({
+                  text: c.text,
+                  start_line: c.start_line,
+                  end_line: c.end_line,
+                })),
+              };
+            }
+            return null;
+          } catch {
+            return null;
+          }
+        })
+      );
+
+      for (const result of batchResults) {
+        if (result) {
+          chunkedFiles.push(result);
+        }
       }
 
-      const filePath = filePaths[i];
-      try {
-        const fullPath = join(this.repoRoot, filePath);
-        const stat = await statAsync(fullPath);
-        
-        if (stat.size / 1024 > maxFileSizeKb) {
-          continue;
-        }
+      const i = batchEnd;
+      if (i % 100 === 0 || batchEnd === filePaths.length) {
+        const percent = Math.round((batchEnd / totalFilePaths) * 30);
+        await this.emitProgress({
+          phase: "chunking",
+          filesTotal: totalFilePaths,
+          filesProcessed: batchEnd,
+          chunksTotal: chunkedFiles.reduce((sum, f) => sum + f.chunks.length, 0),
+          chunksProcessed: 0,
+          percent,
+          message: `[${this.generateProgressBar(percent)}] Chunking... (${batchEnd}/${totalFilePaths} files)`,
+        });
+      }
 
-        const content = await readFileAsync(fullPath, "utf-8");
-        const hash = getFileHash(content);
-        const storedHash = this.db.getFileHash(filePath);
-        
-        if (storedHash === hash) {
-          continue;
-        }
-
-        const chunks = chunkCode(content, maxTokens, overlapTokens, contextLimit);
-        if (chunks.length > 0) {
-          chunkedFiles.push({
-            path: filePath,
-            hash,
-            chunks: chunks.map((c) => ({
-              text: c.text,
-              start_line: c.start_line,
-              end_line: c.end_line,
-            })),
-          });
-        }
-
-        if (i % 20 === 0) {
-          const percent = Math.round((i / totalFilePaths) * 30);
-          await this.emitProgress({
-            phase: "chunking",
-            filesTotal: totalFilePaths,
-            filesProcessed: i,
-            chunksTotal: chunkedFiles.reduce((sum, f) => sum + f.chunks.length, 0),
-            chunksProcessed: 0,
-            percent,
-            message: `[${this.generateProgressBar(percent)}] Chunking... (${i}/${totalFilePaths} files)`,
-          });
-        }
-      } catch {
+      if (batchEnd < filePaths.length) {
+        await new Promise((resolve) => setImmediate(resolve));
       }
     }
 

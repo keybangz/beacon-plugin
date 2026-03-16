@@ -66,6 +66,7 @@ export class HNSWVectorIndex {
   private entries: Map<number, IndexEntry> = new Map();
   private idToInternal: Map<string, number> = new Map();
   private internalToId: Map<number, string> = new Map();
+  private fileToChunkIds: Map<string, Set<string>> = new Map();
   private nextInternalId: number = 0;
   private config: HNSWIndexConfig;
   private indexPath: string;
@@ -110,6 +111,12 @@ export class HNSWVectorIndex {
       this.idToInternal = new Map(data.idToInternal);
       this.internalToId = new Map(data.internalToId.map(([k, v]: [number, string]) => [k, v]));
       this.nextInternalId = data.nextInternalId || 0;
+
+      if (data.fileToChunkIds) {
+        this.fileToChunkIds = new Map(
+          Object.entries(data.fileToChunkIds).map(([k, v]: [string, string[]]) => [k, new Set(v)])
+        );
+      }
     } catch {
       throw new Error("Failed to load HNSW index from disk");
     }
@@ -129,6 +136,9 @@ export class HNSWVectorIndex {
         idToInternal: Array.from(this.idToInternal.entries()),
         internalToId: Array.from(this.internalToId.entries()),
         nextInternalId: this.nextInternalId,
+        fileToChunkIds: Object.fromEntries(
+          Array.from(this.fileToChunkIds.entries()).map(([k, v]) => [k, Array.from(v)])
+        ),
       };
       
       writeFileSync(this.entriesPath, JSON.stringify(data));
@@ -154,6 +164,13 @@ export class HNSWVectorIndex {
       this.idToInternal.set(chunkId, internalId);
       this.internalToId.set(internalId, chunkId);
       this.entries.set(internalId, entry);
+
+      let chunkIds = this.fileToChunkIds.get(entry.filePath);
+      if (!chunkIds) {
+        chunkIds = new Set();
+        this.fileToChunkIds.set(entry.filePath, chunkIds);
+      }
+      chunkIds.add(chunkId);
 
       this.index!.addPoint(embedding, internalId);
       this.isDirty = true;
@@ -195,6 +212,17 @@ export class HNSWVectorIndex {
       const internalId = this.idToInternal.get(chunkId);
       if (internalId === undefined) return false;
 
+      const entry = this.entries.get(internalId);
+      if (entry) {
+        const chunkIds = this.fileToChunkIds.get(entry.filePath);
+        if (chunkIds) {
+          chunkIds.delete(chunkId);
+          if (chunkIds.size === 0) {
+            this.fileToChunkIds.delete(entry.filePath);
+          }
+        }
+      }
+
       this.index.markDelete(internalId);
       this.idToInternal.delete(chunkId);
       this.internalToId.delete(internalId);
@@ -207,17 +235,11 @@ export class HNSWVectorIndex {
 
   async removeFile(filePath: string): Promise<number> {
     return this.mutex.runExclusive(async () => {
+      const chunkIds = this.fileToChunkIds.get(filePath);
+      if (!chunkIds) return 0;
+
       let removed = 0;
-      const toRemove: string[] = [];
-
-      for (const [chunkId, internalId] of this.idToInternal) {
-        const entry = this.entries.get(internalId);
-        if (entry && entry.filePath === filePath) {
-          toRemove.push(chunkId);
-        }
-      }
-
-      for (const chunkId of toRemove) {
+      for (const chunkId of chunkIds) {
         const internalId = this.idToInternal.get(chunkId);
         if (internalId !== undefined && this.index) {
           this.index.markDelete(internalId);
@@ -227,6 +249,8 @@ export class HNSWVectorIndex {
           removed++;
         }
       }
+
+      this.fileToChunkIds.delete(filePath);
 
       if (removed > 0) {
         this.isDirty = true;
