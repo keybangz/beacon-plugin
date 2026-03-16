@@ -24,6 +24,8 @@
 
 ## Quick Start
 
+### Option A: Install from Source
+
 ```bash
 git clone https://github.com/keybangz/beacon-opencode
 cd beacon-opencode
