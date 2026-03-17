@@ -15,10 +15,10 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     
-    - name: Use Node.js 20.x
+    - name: Use Node.js 24.x
       uses: actions/setup-node@v4
       with:
-        node-version: 20.x
+        node-version: 24.x
         cache: 'npm'
     
     - name: Install dependencies
@@ -44,10 +44,10 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     
-    - name: Use Node.js 20.x
+    - name: Use Node.js 24.x
       uses: actions/setup-node@v4
       with:
-        node-version: 20.x
+        node-version: 24.x
         cache: 'npm'
     
     - name: Install dependencies
@@ -88,7 +88,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        node-version: [18.x, 20.x, 22.x]
+        node-version: [24.x]
 
     steps:
     - uses: actions/checkout@v4
@@ -109,15 +109,15 @@ jobs:
   security:
     needs: build
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     
     steps:
     - uses: actions/checkout@v4
     
-    - name: Use Node.js 20.x
+    - name: Use Node.js 24.x
       uses: actions/setup-node@v4
       with:
-        node-version: 20.x
+        node-version: 24.x
         cache: 'npm'
     
     - name: Install dependencies
@@ -130,10 +130,10 @@ jobs:
     - name: CodeQL Security Analysis
       uses: github/codeql-action/init@v3
       with:
-        languages: ${{ matrix.language }}
+        languages: javascript-typescript
     
     - name: Perform security analysis
-      uses: github/codeql-action/perform-analysis@v3
+      uses: github/codeql-action/perform@v3
       with:
         category: security
 
@@ -146,10 +146,10 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     
-    - name: Use Node.js 20.x
+    - name: Use Node.js 24.x
       uses: actions/setup-node@v4
       with:
-        node-version: 20.x
+        node-version: 24.x
         cache: 'npm'
     
     - name: Install dependencies

@@ -1,6 +1,6 @@
 import type { Plugin } from "@opencode-ai/plugin";
-import * as fs from 'fs';
-import * as path from 'path';
+import * as fs from "fs";
+import * as path from "path";
 import SearchTool from "./src/tools/search.js";
 import IndexTool from "./src/tools/index.js";
 import ReindexTool from "./src/tools/reindex.js";
@@ -18,32 +18,39 @@ import type { FileWatcher } from "./src/lib/watcher.js";
 import { getCoordinator, releaseCoordinator } from "./src/lib/pool.js";
 import type { IndexProgress } from "./src/lib/sync.js";
 
-const isNode = typeof process !== 'undefined' && process.versions?.node;
+const isNode = typeof process !== "undefined" && process.versions?.node;
 
 function getConfigPath(worktree: string): string {
   if (isNode) {
-    return path.join(worktree, '.opencode', 'beacon.json');
+    return path.join(worktree, ".opencode", "beacon.json");
   }
-  return '';
+  return "";
 }
 
-function ensureUserConfig(worktree: string): { config: any | null; created: boolean } {
+function ensureUserConfig(worktree: string): {
+  config: any | null;
+  created: boolean;
+} {
   if (!isNode) return { config: null, created: false };
-  
+
   const configPath = getConfigPath(worktree);
   const configDir = path.dirname(configPath);
-  
+
   // Read default config from dist
   let defaultConfig: any = null;
   try {
-    const defaultConfigPath = path.join(__dirname, 'config', 'beacon.default.json');
+    const defaultConfigPath = path.join(
+      __dirname,
+      "config",
+      "beacon.default.json",
+    );
     if (fs.existsSync(defaultConfigPath)) {
-      defaultConfig = JSON.parse(fs.readFileSync(defaultConfigPath, 'utf8'));
+      defaultConfig = JSON.parse(fs.readFileSync(defaultConfigPath, "utf8"));
     }
   } catch (err) {
     console.warn(`[Beacon] Failed to load default config: ${err}`);
   }
-  
+
   if (!defaultConfig) {
     // Fallback to hardcoded default
     defaultConfig = {
@@ -55,12 +62,12 @@ function ensureUserConfig(worktree: string): { config: any | null; created: bool
         context_limit: 256,
         query_prefix: "",
         api_key_env: "",
-        enabled: true
+        enabled: true,
       },
       chunking: {
         strategy: "hybrid",
         max_tokens: 512,
-        overlap_tokens: 32
+        overlap_tokens: 32,
       },
       indexing: {
         include: [
@@ -75,7 +82,7 @@ function ensureUserConfig(worktree: string): { config: any | null; created: bool
           "**/*.rb",
           "**/*.php",
           "**/*.sql",
-          "**/*.md"
+          "**/*.md",
         ],
         exclude: [
           "node_modules/**",
@@ -85,12 +92,12 @@ function ensureUserConfig(worktree: string): { config: any | null; created: bool
           "*.lock",
           "*.min.js",
           ".git/**",
-          ".env*"
+          ".env*",
         ],
         max_file_size_kb: 500,
         auto_index: true,
         max_files: 10000,
-        concurrency: 4
+        concurrency: 4,
       },
       search: {
         top_k: 10,
@@ -102,39 +109,39 @@ function ensureUserConfig(worktree: string): { config: any | null; created: bool
           weight_rrf: 0.3,
           doc_penalty: 0.5,
           identifier_boost: 1.5,
-          debug: false
-        }
+          debug: false,
+        },
       },
       storage: {
-        path: ".opencode/.beacon"
-      }
+        path: ".opencode/.beacon",
+      },
     };
   }
-  
+
   if (fs.existsSync(configPath)) {
     try {
-      const content = fs.readFileSync(configPath, 'utf8');
+      const content = fs.readFileSync(configPath, "utf8");
       return { config: JSON.parse(content), created: false };
     } catch {
       return { config: null, created: false };
     }
   }
-  
+
   try {
     if (!fs.existsSync(configDir)) {
       fs.mkdirSync(configDir, { recursive: true });
     }
-    
+
     fs.writeFileSync(configPath, JSON.stringify(defaultConfig, null, 2));
     console.log(`[Beacon] Created default config at ${configPath}`);
-    
+
     // Also create .beacon storage directory
-    const beaconStorageDir = path.join(configDir, '.beacon');
+    const beaconStorageDir = path.join(configDir, ".beacon");
     if (!fs.existsSync(beaconStorageDir)) {
       fs.mkdirSync(beaconStorageDir, { recursive: true });
       console.log(`[Beacon] Created storage directory at ${beaconStorageDir}`);
     }
-    
+
     return { config: defaultConfig, created: true };
   } catch (err) {
     console.warn(`[Beacon] Failed to create config: ${err}`);
@@ -369,7 +376,10 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
         try {
           await releaseCoordinator(worktree);
         } catch (releaseError) {
-          console.error(`[Beacon] Failed to release coordinator:`, releaseError);
+          console.error(
+            `[Beacon] Failed to release coordinator:`,
+            releaseError,
+          );
         }
       }
     }
@@ -534,7 +544,10 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
               try {
                 await releaseCoordinator(worktree);
               } catch (releaseError) {
-                console.error(`[Beacon] Failed to release coordinator:`, releaseError);
+                console.error(
+                  `[Beacon] Failed to release coordinator:`,
+                  releaseError,
+                );
               }
             }
           }
@@ -615,7 +628,10 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
                 try {
                   await performAutoIndex();
                 } catch (error) {
-                  console.error(`[Beacon] Auto-indexing failed after git init:`, error);
+                  console.error(
+                    `[Beacon] Auto-indexing failed after git init:`,
+                    error,
+                  );
                 }
               }
               break;

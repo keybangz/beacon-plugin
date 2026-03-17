@@ -37,6 +37,8 @@
     "build": "npm run clean && tsc && cp -r config command scripts dist/",
     "dev": "npm run clean && tsc --watch",
     "test": "vitest",
+    "test:shard": "node scripts/shard-runner.cjs",
+    "test:report": "node scripts/test-reporter.cjs",
     "type-check": "tsc --noEmit",
     "setup": "node scripts/setup.cjs",
     "prepublishOnly": "npm run build",
