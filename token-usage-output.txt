@@ -1,0 +1,140 @@
+═══════════════════════════════════════════════════════════════════════════
+Token Analysis: Session ses_303cf60f8ffeCgHMsUBjvdTJ40
+Model: minimax-m2.5-free
+═══════════════════════════════════════════════════════════════════════════
+
+TOKEN BREAKDOWN BY CATEGORY
+─────────────────────────────────────────────────────────────────────────
+Estimated using tokenizer analysis of message content:
+
+Input Categories:
+  SYSTEM    ██████████████░░░░░░░░░░░░░░░░    46.0% (46,815)
+  USER      ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░        0.7% (697)
+  TOOLS     ████████████████░░░░░░░░░░░░░░    53.3% (54,238)
+
+  Subtotal: 101,750 estimated input tokens
+
+Output Categories:
+  ASSISTANT ██████░░░░░░░░░░░░░░░░░░░░░░░░     20.9% (1,421)
+  REASONING ████████████████████████░░░░░░     79.1% (5,377)
+
+  Subtotal: 6,798 estimated output tokens
+
+Local Total: 108,548 tokens (estimated)
+
+TOOL USAGE BREAKDOWN
+─────────────────────────────────────────────────────────────────────────
+read                 █████████████████████████░░░░░    83.6% (45,334)   39x
+bash                 ███░░░░░░░░░░░░░░░░░░░░░░░░░░░      8.9% (4,810)   31x
+glob                 █░░░░░░░░░░░░░░░░░░░░░░░░░░░░░      3.0% (1,647)    5x
+write                █░░░░░░░░░░░░░░░░░░░░░░░░░░░░░      2.4% (1,312)    6x
+todowrite            █░░░░░░░░░░░░░░░░░░░░░░░░░░░░░        1.8% (998)    9x
+grep                 ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░        0.2% (109)    7x
+edit                 ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░         0.1% (28)   28x
+
+TOP CONTRIBUTORS
+─────────────────────────────────────────────────────────────────────────
+• System (inferred from API)   46,815 tokens (43.1%)
+• read                         45,334 tokens (41.8%)
+• bash                         4,810 tokens (4.4%)
+• glob                         1,647 tokens (1.5%)
+• write                        1,312 tokens (1.2%)
+
+═══════════════════════════════════════════════════════════════════════════
+MOST RECENT API CALL
+─────────────────────────────────────────────────────────────────────────
+
+Raw telemetry from last API response:
+  Input (fresh):            313 tokens
+  Cache read:           101,437 tokens
+  Cache write:              311 tokens
+  Output:                    22 tokens
+  ─────────────────────────────────────
+  Total:                102,083 tokens
+
+═══════════════════════════════════════════════════════════════════════════
+SESSION TOTALS (All 124 API calls)
+─────────────────────────────────────────────────────────────────────────
+
+Total tokens processed across the entire session (for cost calculation):
+
+  Input tokens:          92,908 (fresh tokens across all calls)
+  Cache read:         7,860,713 (cached tokens across all calls)
+  Cache write:          127,611 (tokens written to cache)
+  Output tokens:         27,513 (all model responses)
+  ─────────────────────────────────────
+  Session Total:      8,108,745 tokens (for billing)
+
+═══════════════════════════════════════════════════════════════════════════
+ESTIMATED SESSION COST (API Key Pricing)
+─────────────────────────────────────────────────────────────────────────
+
+You appear to be on a subscription plan (API cost is $0).
+Here's what this session would cost with direct API access:
+
+  Input tokens:          92,908 × $1.00/M  = $0.0929
+  Output tokens:         27,513 × $3.00/M  = $0.0825
+─────────────────────────────────────────────────────────────────────────
+ESTIMATED TOTAL: $0.1754
+
+Note: This estimate uses standard API pricing from models.json.
+Actual API costs may vary based on provider and context size.
+
+═══════════════════════════════════════════════════════════════════════════
+CONTEXT BREAKDOWN (Estimated from cache_write tokens)
+─────────────────────────────────────────────────────────────────────────
+
+  Base System Prompt     ██████████████████████░░░░░░░░   ~10,230 tokens
+  Tool Definitions (8)   ██████░░░░░░░░░░░░░░░░░░░░░░░░   ~ 2,800 tokens
+  Environment Context    ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   ~   150 tokens
+  Project Tree           █░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   ~   500 tokens
+  ───────────────────────────────────────────────────────────────────
+  Total Cached Context:                                  ~13,680 tokens
+
+  Note: Breakdown estimated from first cache_write. Actual distribution may vary.
+
+═══════════════════════════════════════════════════════════════════════════
+TOOL DEFINITION COSTS (Estimated from argument analysis)
+─────────────────────────────────────────────────────────────────────────
+
+  Tool                Est. Tokens   Args   Complexity
+  ───────────────────────────────────────────────────────────────────
+  edit                       ~400       4   simple
+  todowrite                  ~380       1   complex (arrays/objects)
+  read                       ~370       3   simple
+  bash                       ~370       3   simple
+  grep                       ~370       3   simple
+  write                      ~340       2   simple
+  glob                       ~310       1   simple
+  tokenscope                 ~280       0   simple
+  ───────────────────────────────────────────────────────────────────
+  Total:             ~      2,820 tokens (8 enabled tools)
+
+  Note: Estimates inferred from tool call arguments in this session.
+        Actual schema tokens may vary +/-20%.
+
+═══════════════════════════════════════════════════════════════════════════
+CACHE EFFICIENCY
+─────────────────────────────────────────────────────────────────────────
+
+  Token Distribution:
+    Cache Read:         7,860,713 tokens   ██████████████████████████████  98.8%
+    Fresh Input:           92,908 tokens   ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  1.2%
+  ───────────────────────────────────────────────────────────────────
+  Cache Hit Rate:      98.8%
+
+  Cost Analysis (minimax-m2.5-free @ $1.00/M input, $0.00/M cache read):
+    Without caching:   $7.9536  (7,953,621 tokens x $1.00/M)
+    With caching:      $0.0929  (fresh x $1.00/M + cached x $0.00/M)
+  ───────────────────────────────────────────────────────────────────
+  Cost Savings:        $7.8607  (98.8% reduction)
+  Effective Rate:      $0.01/M tokens  (vs. $1.00/M standard)
+
+═══════════════════════════════════════════════════════════════════════════
+SUMMARY
+─────────────────────────────────────────────────────────────────────────
+
+                          Cost        Tokens          API Calls
+  Session:           $    0.1754     8,108,745           124
+
+═══════════════════════════════════════════════════════════════════════════
