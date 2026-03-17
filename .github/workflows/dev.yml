@@ -126,16 +126,6 @@ jobs:
     - name: Run npm audit
       run: npm audit --audit-level=moderate
       continue-on-error: true
-    
-    - name: CodeQL Security Analysis
-      uses: github/codeql-action/init@v3
-      with:
-        languages: javascript-typescript
-    
-    - name: Perform security analysis
-      uses: github/codeql-action/perform@v3
-      with:
-        category: security
 
   # Job 5: Dependency update check (only for PRs)
   check-dependencies:

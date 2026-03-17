@@ -4,8 +4,11 @@ import { loadConfig } from "../lib/config.js";
 import { openDatabase } from "../lib/db.js";
 import { Embedder } from "../lib/embedder.js";
 import { truncateToTokenLimit } from "../lib/tokenizer.js";
+import { SearchCache } from "../lib/cache.js";
 import { join } from "path";
 import { existsSync } from "fs";
+
+const searchCache = new SearchCache(200, 300);
 
 export default tool({
   description:
@@ -43,6 +46,12 @@ export default tool({
         });
       }
 
+      const cacheOptions = { topK: args.topK, threshold: args.threshold, pathPrefix: args.pathPrefix, noHybrid: args.noHybrid };
+      const cachedResults = searchCache.get(args.query, cacheOptions);
+      if (cachedResults) {
+        return JSON.stringify(cachedResults);
+      }
+
       const db = openDatabase(dbPath, config.embedding.dimensions);
       const useEmbeddings = config.embedding.enabled !== false;
       
@@ -62,7 +71,7 @@ export default tool({
             args.pathPrefix
           );
           
-          return JSON.stringify({
+          const output = JSON.stringify({
             query: args.query,
             mode: "bm25-only",
             matches: results.map((r) => ({
@@ -72,6 +81,8 @@ export default tool({
               preview: truncateToTokenLimit(r.chunkText, 150),
             })),
           });
+          searchCache.set(args.query, JSON.parse(output), cacheOptions);
+          return output;
         }
 
         const effectiveContextLimit = config.embedding.context_limit ?? config.chunking.max_tokens;
@@ -111,7 +122,7 @@ export default tool({
               });
             }
             
-            return JSON.stringify({
+            const output = JSON.stringify({
               warning: `Embedding server unavailable (${embedErrorMsg}), using keyword search`,
               matches: ftsResults.map((r) => ({
                 file: r.filePath,
@@ -121,9 +132,11 @@ export default tool({
                 _note: r._note,
               })),
             });
+            searchCache.set(args.query, JSON.parse(output), cacheOptions);
+            return output;
           }
 
-          return JSON.stringify({
+          const output = JSON.stringify({
             query: args.query,
             mode: "hybrid",
             matches: results.map((r) => ({
@@ -133,6 +146,8 @@ export default tool({
               preview: truncateToTokenLimit(r.chunkText, 150),
             })),
           });
+          searchCache.set(args.query, JSON.parse(output), cacheOptions);
+          return output;
         } finally {
           await embedder.close();
         }

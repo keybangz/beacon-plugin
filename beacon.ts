@@ -310,16 +310,67 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
     return match?.[1] || null;
   }
 
-  async function performAutoIndex(sessionID?: string): Promise<void> {
+  async function executeGrepReplacement(query: string, pathPrefix?: string): Promise<string> {
+    let pooled;
+    try {
+      pooled = await getCoordinator(worktree);
+      const stats = pooled.db.getStats();
+
+      if (stats.total_chunks === 0) {
+        return JSON.stringify({
+          error: "Index not found. Run 'reindex' tool to create the index.",
+          matches: [],
+        });
+      }
+
+      const results = pooled.db.search(
+        new Array(pooled.config.embedding.dimensions).fill(0),
+        10,
+        0.01,
+        query,
+        pooled.config,
+        pathPrefix,
+        false
+      );
+
+      return JSON.stringify({
+        query,
+        mode: "grep-replacement",
+        matches: results.map((r) => ({
+          file: r.filePath,
+          lines: `${r.startLine}-${r.endLine}`,
+          similarity: r.similarity.toFixed(3),
+          preview: r.chunkText.substring(0, 200),
+        })),
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      return JSON.stringify({
+        error: `Grep replacement failed: ${errorMessage}`,
+        matches: [],
+      });
+    } finally {
+      if (pooled) {
+        try {
+          await releaseCoordinator(worktree);
+        } catch (releaseError) {
+          console.error(`[Beacon] Failed to release coordinator:`, releaseError);
+        }
+      }
+    }
+  }
+
+  async function performAutoIndex(sessionID?: string, forceReindex: boolean = false): Promise<void> {
     if (!isInitialized || !config) return;
-    if (!config.indexing.auto_index) return;
+    if (!config.indexing.auto_index && !forceReindex) return;
 
     let pooled;
     try {
       pooled = await getCoordinator(worktree);
       const stats = pooled.db.getStats();
 
-      if (stats.total_chunks > 0) {
+      // Skip if already indexed and not forcing reindex
+      if (!forceReindex && stats.total_chunks > 0) {
         await releaseCoordinator(worktree);
         return;
       }
@@ -380,6 +431,34 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
             `[Beacon] Failed to release coordinator:`,
             releaseError,
           );
+        }
+      }
+    }
+  }
+
+  async function checkAndTriggerIndexing(sessionID?: string): Promise<void> {
+    if (!isInitialized || !config) return;
+    if (!config.indexing.auto_index) return;
+
+    let pooled;
+    try {
+      pooled = await getCoordinator(worktree);
+      const stats = pooled.db.getStats();
+      
+      // If no index exists, trigger indexing
+      if (stats.total_chunks === 0) {
+        await releaseCoordinator(worktree);
+        pooled = null;
+        await performAutoIndex(sessionID, true);
+      }
+    } catch (error) {
+      console.error(`[Beacon] Index check error:`, error);
+    } finally {
+      if (pooled) {
+        try {
+          await releaseCoordinator(worktree);
+        } catch (releaseError) {
+          console.error(`[Beacon] Failed to release coordinator:`, releaseError);
         }
       }
     }
@@ -557,6 +636,7 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
 
     tool: {
       grep: SearchTool,
+      grepsearch: SearchTool,
       search: SearchTool,
       index: IndexTool,
       reindex: ReindexTool,
