@@ -1,5 +1,19 @@
-import { describe, it, expect, beforeEach } from 'bun:test';
-import { simpleHash } from '../src/lib/hash.js';
+import { describe, it, expect, mock } from 'bun:test';
+
+// Re-register the real hash implementation inline.
+// This guards against mock.module leakage from sync.test.ts / embedder.test.ts
+// which both stub simpleHash to return 12345 for their own unit tests.
+mock.module('../src/lib/hash.js', () => ({
+  simpleHash(str: string): number {
+    let hash = 5381;
+    for (let i = 0; i < str.length; i++) {
+      hash = Math.imul(hash, 33) ^ str.charCodeAt(i);
+    }
+    return hash >>> 0;
+  },
+}));
+
+const { simpleHash } = await import('../src/lib/hash.js');
 
 describe('Hash Functions', () => {
   describe('simpleHash', () => {

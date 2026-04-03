@@ -1,5 +1,22 @@
-import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
-import { loadConfig, validateConfig, invalidateConfigCache } from '../src/lib/config.js';
+import { describe, it, expect, beforeEach, mock } from 'bun:test';
+import { existsSync, readFileSync, mkdirSync, writeFileSync, readdirSync, statSync, unlinkSync, rmdirSync } from 'fs';
+
+// Re-register the real fs module to override the mock from embedder.test.ts
+// (which stubs existsSync to always return true, causing ENOENT in loadRepoConfig).
+// We capture the real fs functions via static import (hoisted before any mock.module)
+// and then re-assert them as the active module.
+mock.module('fs', () => ({
+  existsSync,
+  readFileSync,
+  mkdirSync,
+  writeFileSync,
+  readdirSync,
+  statSync,
+  unlinkSync,
+  rmdirSync,
+}));
+
+const { loadConfig, validateConfig, invalidateConfigCache } = await import('../src/lib/config.js');
 
 // A path guaranteed to not be inside any git repo on any CI runner.
 // /tmp is outside the checkout directory and has no .git ancestor.
