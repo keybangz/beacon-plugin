@@ -1,14 +1,20 @@
-import { describe, it, expect, beforeEach, afterEach, mock, spyOn } from 'bun:test';
-import { loadConfig, validateConfig } from '../src/lib/config.js';
+import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
+import { loadConfig, validateConfig, invalidateConfigCache } from '../src/lib/config.js';
+
+// A path guaranteed to not be inside any git repo on any CI runner.
+// /tmp is outside the checkout directory and has no .git ancestor.
+const TEST_REPO_ROOT = '/tmp/beacon-test-no-repo';
 
 describe('Configuration Management', () => {
-  // Note: In bun:test, module mocks are set up differently.
-  // For config tests that need fs/path mocking, we use mock.module
-  
   describe('loadConfig', () => {
+    beforeEach(() => {
+      // Clear any cached config for the test path to prevent cross-test pollution
+      invalidateConfigCache(TEST_REPO_ROOT);
+    });
+
     it('should return default config when no repo config exists', () => {
-      const config = loadConfig('/test/repo');
-      
+      const config = loadConfig(TEST_REPO_ROOT);
+
       expect(config).toHaveProperty('embedding');
       expect(config).toHaveProperty('chunking');
       expect(config).toHaveProperty('indexing');
