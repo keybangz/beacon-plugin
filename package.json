@@ -46,6 +46,7 @@
   },
   "dependencies": {
     "chokidar": "^5.0.0",
+    "fast-glob": "^3.3.0",
     "hnswlib-node": "^3.0.0",
     "onnxruntime-node": "^1.24.3",
     "picomatch": "^4.0.0",

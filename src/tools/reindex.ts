@@ -1,9 +1,10 @@
-import { tool } from "@opencode-ai/plugin";
-import { getRepoRoot } from "../lib/repo-root.js";
+import { tool, type ToolDefinition } from "@opencode-ai/plugin";
+import { getBeaconRoot } from "../lib/repo-root.js";
 import { loadConfig } from "../lib/config.js";
 import { openDatabase } from "../lib/db.js";
 import { Embedder } from "../lib/embedder.js";
 import { IndexCoordinator, type IndexProgress } from "../lib/sync.js";
+import { connectionPool } from "../lib/pool.js";
 import { join } from "path";
 import { mkdirSync, existsSync, unlinkSync } from "fs";
 
@@ -31,7 +32,7 @@ function shouldShowProgress(percent: number, phase: string, lastMilestone: { per
   return false;
 }
 
-export default tool({
+const _export: ToolDefinition = tool({
   description:
     "Force full re-index from scratch - deletes existing embeddings and rebuilds the entire database",
   args: {
@@ -42,15 +43,43 @@ export default tool({
   },
   async execute(args: any, context: any): Promise<string> {
     try {
-      const repoRoot = getRepoRoot(context.worktree);
+      if (!args.confirm) {
+        return JSON.stringify({
+          status: "error",
+          error: "Reindex requires explicit confirmation. Pass confirm=true to proceed. WARNING: this will delete all existing embeddings and rebuild the index from scratch.",
+        });
+      }
+
+      // Safety net: block reindex if an indexer is already running in this process.
+      // This prevents accidentally deleting the DB mid-index and corrupting the run.
+      if (connectionPool.isIndexerRunning(context.worktree)) {
+        return JSON.stringify({
+          status: "blocked",
+          error: "An indexing operation is currently in progress. Running reindex now would delete the DB mid-index and corrupt it. Wait for the current index to complete, or call terminateIndexer first, then retry.",
+          suggestion: "Call the terminateIndexer tool to stop the current operation, then call reindex again.",
+        });
+      }
+
+      const repoRoot = getBeaconRoot(context.worktree);
       const config = loadConfig(repoRoot);
 
-      const storagePath = join(repoRoot, config.storage.path);
+      // Warn early if the embedding model isn't downloaded — indexing will still
+      // proceed but semantic search will be unavailable (BM25-only fallback).
+      const modelCheck = Embedder.checkModelDownloaded(config.embedding, config.storage.path);
+      const modelWarning = modelCheck && !modelCheck.downloaded
+        ? `WARNING: Model '${config.embedding.model}' is not downloaded. Vector embeddings will be skipped and search quality will be degraded (BM25-only). Run the 'downloadModels' tool with model='${config.embedding.model}' first, then reindex again.`
+        : undefined;
+
+      const storagePath = config.storage.path;
       if (!existsSync(storagePath)) {
         mkdirSync(storagePath, { recursive: true });
       }
 
       const dbPath = join(storagePath, "embeddings.db");
+
+      // Close any pooled connection for this repo before deleting DB files to
+      // avoid leaving a stale open file handle / in-memory state behind.
+      await connectionPool.close(context.worktree);
 
       for (const suffix of ["", "-wal", "-shm"]) {
         const f = dbPath + suffix;
@@ -68,61 +97,67 @@ export default tool({
         const effectiveContextLimit = config.embedding.context_limit ?? config.chunking.max_tokens;
         const embedder = new Embedder(config.embedding, effectiveContextLimit, storagePath);
 
-        const coordinator = new IndexCoordinator(
-          config,
-          db,
-          embedder,
-          repoRoot
-        );
+        try {
+          const coordinator = new IndexCoordinator(
+            config,
+            db,
+            embedder,
+            repoRoot,
+            (running) => {
+              if (running) {
+                connectionPool.markIndexerRunning(repoRoot);
+              } else {
+                connectionPool.markIndexerDone(repoRoot);
+              }
+            }
+          );
 
-        const lastMilestone = { percent: 0, phase: "" };
+          const lastMilestone = { percent: 0, phase: "" };
 
-        const onProgress = (progress: IndexProgress) => {
-          if (shouldShowProgress(progress.percent, progress.phase, lastMilestone)) {
-            lastMilestone.percent = progress.percent;
-            lastMilestone.phase = progress.phase;
-          }
-        };
-        
-        const startTime = Date.now();
-        const result = await coordinator.performFullIndex(onProgress);
-        const endTime = Date.now();
-        const durationSeconds = ((endTime - startTime) / 1000).toFixed(2);
+          const onProgress = (progress: IndexProgress) => {
+            if (shouldShowProgress(progress.percent, progress.phase, lastMilestone)) {
+              lastMilestone.percent = progress.percent;
+              lastMilestone.phase = progress.phase;
+            }
+          };
 
-        const stats = db.getStats();
-        const syncProgress = db.getSyncProgress();
+          const startTime = Date.now();
+          const result = await coordinator.performFullIndex(onProgress);
+          const endTime = Date.now();
+          const durationSeconds = ((endTime - startTime) / 1000).toFixed(2);
 
-        context.metadata({ 
-          title: `Beacon Reindex: ${stats.total_chunks} chunks`,
-          metadata: { chunks: stats.total_chunks, files: result.filesIndexed }
-        });
+          const stats = db.getStats();
+          const syncProgress = db.getSyncProgress();
 
-        return JSON.stringify({
-          status: "success",
-          message: "Full reindex completed successfully",
-          files_indexed: result.filesIndexed,
-          total_chunks: stats.total_chunks,
-          database_size_mb: stats.database_size_mb,
-          duration_seconds: parseFloat(durationSeconds),
-          sync_status: syncProgress.sync_status,
-          statistics: {
-            files_processed: result.filesIndexed,
-            chunks_created: stats.total_chunks,
-            average_chunks_per_file:
-              result.filesIndexed > 0
-                ? (stats.total_chunks / result.filesIndexed).toFixed(2)
-                : "0",
-          },
-        });
+          return JSON.stringify({
+            status: "success",
+            message: "Full reindex completed successfully",
+            files_indexed: result.filesIndexed,
+            total_chunks: stats.total_chunks,
+            database_size_mb: stats.database_size_mb,
+            duration_seconds: parseFloat(durationSeconds),
+            sync_status: syncProgress.sync_status,
+            model_downloaded: modelCheck ? modelCheck.downloaded : null,
+            ...(modelWarning && { model_warning: modelWarning }),
+            statistics: {
+              files_processed: result.filesIndexed,
+              chunks_created: stats.total_chunks,
+              average_chunks_per_file:
+                result.filesIndexed > 0
+                  ? (stats.total_chunks / result.filesIndexed).toFixed(2)
+                  : "0",
+            },
+          });
+        } finally {
+          await embedder.close();
+        }
       } finally {
         db.close();
       }
     } catch (error: unknown) {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
-      
-      context.metadata({ title: `❌ Beacon Reindex Failed` });
-      
+
       return JSON.stringify({
         status: "error",
         error: `Reindex failed: ${errorMessage}`,
@@ -130,3 +165,4 @@ export default tool({
     }
   },
 });
+export default _export;

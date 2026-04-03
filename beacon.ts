@@ -1,6 +1,7 @@
 import type { Plugin } from "@opencode-ai/plugin";
 import * as fs from "fs";
 import * as path from "path";
+import { initLogger } from "./src/lib/logger.js";
 import SearchTool from "./src/tools/search.js";
 import IndexTool from "./src/tools/index.js";
 import ReindexTool from "./src/tools/reindex.js";
@@ -11,8 +12,8 @@ import WhitelistTool from "./src/tools/whitelist.js";
 import PerformanceTool from "./src/tools/performance.js";
 import TerminateIndexerTool from "./src/tools/terminate-indexer.js";
 import DownloadModelTool from "./src/tools/download-model.js";
-import { findRepoRoot } from "./src/lib/repo-root.js";
-import { loadConfig } from "./src/lib/config.js";
+import { getBeaconRoot } from "./src/lib/repo-root.js";
+import { loadConfig, invalidateConfigCache } from "./src/lib/config.js";
 import { getOrCreateWatcher } from "./src/lib/watcher.js";
 import type { FileWatcher } from "./src/lib/watcher.js";
 import { getCoordinator, releaseCoordinator } from "./src/lib/pool.js";
@@ -48,7 +49,7 @@ function ensureUserConfig(worktree: string): {
       defaultConfig = JSON.parse(fs.readFileSync(defaultConfigPath, "utf8"));
     }
   } catch (err) {
-    console.warn(`[Beacon] Failed to load default config: ${err}`);
+    // Silent fail — console prohibited
   }
 
   if (!defaultConfig) {
@@ -133,18 +134,15 @@ function ensureUserConfig(worktree: string): {
     }
 
     fs.writeFileSync(configPath, JSON.stringify(defaultConfig, null, 2));
-    console.log(`[Beacon] Created default config at ${configPath}`);
 
     // Also create .beacon storage directory
     const beaconStorageDir = path.join(configDir, ".beacon");
     if (!fs.existsSync(beaconStorageDir)) {
       fs.mkdirSync(beaconStorageDir, { recursive: true });
-      console.log(`[Beacon] Created storage directory at ${beaconStorageDir}`);
     }
 
     return { config: defaultConfig, created: true };
   } catch (err) {
-    console.warn(`[Beacon] Failed to create config: ${err}`);
     return { config: null, created: false };
   }
 }
@@ -267,7 +265,79 @@ class InitMutex {
   }
 }
 
+const DEFAULT_BEACONIGNORE = `# Beacon ignore file
+# Add glob patterns here to exclude files from indexing
+# One pattern per line. Lines starting with # are comments.
+#
+# Examples:
+# secret-dir/
+# *.secret
+# private/**
+
+# Version control
+.git/**
+.svn/**
+.hg/**
+.bzr/**
+
+# Package manager dependencies
+node_modules/**
+vendor/**
+bower_components/**
+__pypackages__/**
+.pnp/**
+.yarn/cache/**
+
+# Python environments & caches
+venv/**
+.venv/**
+env/**
+__pycache__/**
+.pytest_cache/**
+.mypy_cache/**
+.ruff_cache/**
+.tox/**
+*.egg-info/**
+site-packages/**
+
+# Build output
+dist/**
+build/**
+out/**
+output/**
+target/**
+bin/**
+obj/**
+.next/**
+.nuxt/**
+.svelte-kit/**
+_site/**
+public/build/**
+.turbo/**
+.vercel/**
+.netlify/**
+
+# Lock files
+*.lock
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+Pipfile.lock
+poetry.lock
+Cargo.lock
+go.sum
+Gemfile.lock
+composer.lock
+
+# Logs
+logs/**
+*.log
+`;
+
 export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
+  // Wire the SDK client into the logger FIRST, before any module that uses log.
+  initLogger(client);
+
   let repoRoot: string | null = null;
   let config: ReturnType<typeof loadConfig> | null = null;
   let fileWatcher: FileWatcher | null = null;
@@ -298,7 +368,6 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
 
     // Avoid false positives for file operations
     if (command.includes("-l") && !hasFileExtension) {
-      // List-only mode, likely checking for existence
       return false;
     }
 
@@ -354,7 +423,7 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
         try {
           await releaseCoordinator(worktree);
         } catch (releaseError) {
-          console.error(`[Beacon] Failed to release coordinator:`, releaseError);
+          // Silent fail
         }
       }
     }
@@ -420,17 +489,13 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
         await pooled.coordinator.performFullIndex();
       }
     } catch (error) {
-      console.error(`[Beacon] Auto-indexing error:`, error);
       throw error; // Re-throw so callers can handle it
     } finally {
       if (pooled) {
         try {
           await releaseCoordinator(worktree);
         } catch (releaseError) {
-          console.error(
-            `[Beacon] Failed to release coordinator:`,
-            releaseError,
-          );
+          // Silent fail
         }
       }
     }
@@ -452,13 +517,13 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
         await performAutoIndex(sessionID, true);
       }
     } catch (error) {
-      console.error(`[Beacon] Index check error:`, error);
+      // Silent fail
     } finally {
       if (pooled) {
         try {
           await releaseCoordinator(worktree);
         } catch (releaseError) {
-          console.error(`[Beacon] Failed to release coordinator:`, releaseError);
+          // Silent fail
         }
       }
     }
@@ -477,15 +542,39 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
       // Ensure config exists before trying to load it
       ensureUserConfig(worktree);
 
-      const detectedRoot = findRepoRoot(worktree);
+      const detectedRoot = getBeaconRoot(worktree);
       if (!detectedRoot) {
         release();
         return false;
       }
 
       repoRoot = detectedRoot;
+
+      // AUTO-CREATE .beaconignore if it doesn't exist
+      const beaconIgnorePath = path.join(repoRoot, ".beaconignore");
+      if (!fs.existsSync(beaconIgnorePath)) {
+        try {
+          fs.writeFileSync(beaconIgnorePath, DEFAULT_BEACONIGNORE, "utf-8");
+        } catch {
+          // Non-fatal: user might not have write access
+        }
+      }
+
       config = loadConfig(repoRoot);
       fileWatcher = (await getOrCreateWatcher(repoRoot, config)) as FileWatcher;
+
+      // Watch for .beaconignore changes and invalidate config cache
+      let beaconIgnoreWatcher: ReturnType<typeof fs.watch> | null = null;
+      try {
+        beaconIgnoreWatcher = fs.watch(beaconIgnorePath, (eventType) => {
+          if (eventType === "change" && repoRoot) {
+            invalidateConfigCache(repoRoot);
+            // Optionally trigger re-index
+          }
+        });
+      } catch {
+        // Non-fatal: watch might fail on some filesystems
+      }
 
       fileWatcher.on("add", async (filePath: string) => {
         let pooled;
@@ -493,16 +582,13 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
           pooled = await getCoordinator(worktree);
           await pooled.coordinator.reembedFile(filePath);
         } catch (error) {
-          console.error(`[Beacon] Error adding file ${filePath}:`, error);
+          // Silent fail
         } finally {
           if (pooled) {
             try {
               await releaseCoordinator(worktree);
             } catch (releaseError) {
-              console.error(
-                `[Beacon] Failed to release coordinator for ${filePath}:`,
-                releaseError,
-              );
+              // Silent fail
             }
           }
         }
@@ -514,16 +600,13 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
           pooled = await getCoordinator(worktree);
           await pooled.coordinator.reembedFile(filePath);
         } catch (error) {
-          console.error(`[Beacon] Error reembedding file ${filePath}:`, error);
+          // Silent fail
         } finally {
           if (pooled) {
             try {
               await releaseCoordinator(worktree);
             } catch (releaseError) {
-              console.error(
-                `[Beacon] Failed to release coordinator for ${filePath}:`,
-                releaseError,
-              );
+              // Silent fail
             }
           }
         }
@@ -536,40 +619,38 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
           pooled.db.deleteChunks(filePath);
           pooled.coordinator.garbageCollect();
         } catch (error) {
-          console.error(`[Beacon] Error deleting file ${filePath}:`, error);
+          // Silent fail
         } finally {
           if (pooled) {
             try {
               await releaseCoordinator(worktree);
             } catch (releaseError) {
-              console.error(
-                `[Beacon] Failed to release coordinator for ${filePath}:`,
-                releaseError,
-              );
+              // Silent fail
             }
           }
         }
       });
 
       fileWatcher.on("error", (error: Error) => {
-        console.error(`[Beacon] File watcher error:`, error);
+        // Silent fail
       });
 
       fileWatcher.start();
       isInitialized = true;
 
       // Perform auto-indexing on initialization if configured
+      // FIX: set hasAttemptedAutoIndex to true AFTER performAutoIndex resolves, not before
       if (config.indexing.auto_index && !hasAttemptedAutoIndex) {
-        hasAttemptedAutoIndex = true;
         // Run silently in background
-        performAutoIndex().catch((error) => {
-          console.error(`[Beacon] Auto-indexing error:`, error);
+        performAutoIndex().then(() => {
+          hasAttemptedAutoIndex = true;
+        }).catch(() => {
+          hasAttemptedAutoIndex = true;
         });
       }
 
       return true;
     } catch (error) {
-      console.error(`[Beacon] Plugin initialization error:`, error);
       return false;
     } finally {
       release();
@@ -590,15 +671,12 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
         }
 
         if (!hasAttemptedAutoIndex) {
-          hasAttemptedAutoIndex = true;
           try {
             await performAutoIndex(sessionID);
           } catch (error) {
-            console.error(
-              `[Beacon] Auto-indexing failed in session.created:`,
-              error,
-            );
+            // Silent fail
           }
+          hasAttemptedAutoIndex = true;
         } else {
           // Check if indexing is needed and show status
           let pooled;
@@ -608,14 +686,11 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
 
             if (stats.total_chunks === 0 && config?.indexing.auto_index) {
               await releaseCoordinator(worktree);
-              pooled = null; // Mark as released
+              pooled = null;
               try {
                 await performAutoIndex(sessionID);
               } catch (error) {
-                console.error(
-                  `[Beacon] Auto-indexing failed in session.created:`,
-                  error,
-                );
+                // Silent fail
               }
             }
           } finally {
@@ -623,10 +698,7 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
               try {
                 await releaseCoordinator(worktree);
               } catch (releaseError) {
-                console.error(
-                  `[Beacon] Failed to release coordinator:`,
-                  releaseError,
-                );
+                // Silent fail
               }
             }
           }
@@ -670,20 +742,10 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
         const query = grepMatch?.[1];
 
         if (query && query.length > 2) {
-          // Log a suggestion but don't block execution
-          // console.warn(
-          //  `💡 Beacon Tip: For code searches, consider using the 'search' tool:\n` +
-          //  `   search(query="${query}")\n` +
-          //  `   (This provides semantic matching and better results)\n` +
-          //  `   Proceeding with grep as requested...`
-          // );
-          // Don't throw - allow execution to continue
+          // Silent fail - allow grep to proceed
           return;
         }
       }
-
-      // For pipeline operations, file searches, or explicit non-code use cases, allow grep
-      // No warning needed - grep is appropriate here
     },
 
     "tool.execute.after": async (input) => {
@@ -708,10 +770,7 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
                 try {
                   await performAutoIndex();
                 } catch (error) {
-                  console.error(
-                    `[Beacon] Auto-indexing failed after git init:`,
-                    error,
-                  );
+                  // Silent fail
                 }
               }
               break;
@@ -732,19 +791,13 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
             pooled = await getCoordinator(worktree);
             await pooled.coordinator.reembedFile(filePath);
           } catch (error) {
-            console.error(
-              `[Beacon] Error reembedding file ${filePath}:`,
-              error,
-            );
+            // Silent fail
           } finally {
             if (pooled) {
               try {
                 await releaseCoordinator(worktree);
               } catch (releaseError) {
-                console.error(
-                  `[Beacon] Failed to release coordinator for ${filePath}:`,
-                  releaseError,
-                );
+                // Silent fail
               }
             }
           }
@@ -757,20 +810,17 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
           let pooled;
           try {
             pooled = await getCoordinator(worktree);
-            for (const _ of deletedFiles) {
+            for (const filePath of deletedFiles) {
               pooled.coordinator.garbageCollect();
             }
           } catch (error) {
-            console.error(`[Beacon] Error garbage collecting:`, error);
+            // Silent fail
           } finally {
             if (pooled) {
               try {
                 await releaseCoordinator(worktree);
               } catch (releaseError) {
-                console.error(
-                  `[Beacon] Failed to release coordinator:`,
-                  releaseError,
-                );
+                // Silent fail
               }
             }
           }
@@ -802,7 +852,7 @@ Run 'git init' to enable Beacon indexing.`);
           }
         }
       } catch (error) {
-        console.error(`[Beacon] Error getting status:`, error);
+        // Silent fail
       } finally {
         if (pooled) {
           try {

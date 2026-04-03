@@ -1,17 +1,18 @@
 import { existsSync, mkdirSync } from "fs";
 import { stat as statAsync, readFile as readFileAsync } from "fs/promises";
 import { join } from "path";
+import { cpus } from "os";
+import { log } from "./logger.js";
 import type { BeaconConfig } from "./types.js";
 import { chunkCode } from "./chunker.js";
 import { Embedder } from "./embedder.js";
+import { getAllFilesViaGlob } from "./fs-glob.js";
 import { getRepoFiles, getModifiedFilesSince, getFileHash } from "./git.js";
 import { shouldIndex } from "./ignore.js";
 import { BeaconDatabase } from "./db.js";
 import { simpleHash } from "./hash.js";
 
 const YIELD_INTERVAL = 50;
-const FILE_BATCH_SIZE = 100;
-const EMBEDDING_BATCH_MEMORY_LIMIT = 5000;
 
 export interface IndexProgress {
   phase: "discovering" | "chunking" | "embedding" | "storing" | "complete" | "error";
@@ -56,18 +57,23 @@ export class IndexCoordinator {
   private repoRoot: string;
   private useEmbeddings: boolean;
   private progressCallback: ProgressCallback | null = null;
+  private isSyncing: boolean = false;
+  // Called when the running state changes so the connection pool can track it.
+  private onRunningChange: ((running: boolean) => void) | null = null;
 
   constructor(
     config: BeaconConfig,
     db: BeaconDatabase,
     embedder: Embedder,
-    repoRoot: string
+    repoRoot: string,
+    onRunningChange?: (running: boolean) => void
   ) {
     this.config = config;
     this.db = db;
     this.embedder = embedder;
     this.repoRoot = repoRoot;
     this.useEmbeddings = config.embedding.enabled !== false;
+    this.onRunningChange = onRunningChange ?? null;
   }
 
   setProgressCallback(callback: ProgressCallback | null): void {
@@ -81,6 +87,13 @@ export class IndexCoordinator {
   }
 
   async performFullIndex(onProgress?: ProgressCallback): Promise<{ success: boolean; filesIndexed: number }> {
+    if (this.isSyncing) {
+      log.warn("beacon", "Sync already in progress, skipping concurrent request");
+      return { success: false, filesIndexed: 0 };
+    }
+    this.isSyncing = true;
+    this.onRunningChange?.(true);
+
     if (onProgress) {
       this.setProgressCallback(onProgress);
     }
@@ -99,16 +112,48 @@ export class IndexCoordinator {
         message: "Discovering files...",
       });
 
-      this.db.clear();
-
-      const allFiles = getRepoFiles(this.repoRoot);
-      const filesToIndex = allFiles.filter((file) =>
-        shouldIndex(
-          file,
-          this.config.indexing.include,
-          this.config.indexing.exclude
-        )
+      let allFiles = getAllFilesViaGlob(
+        this.repoRoot,
+        this.config.indexing.include,
+        this.config.indexing.exclude
       );
+      log.info("beacon", `File discovery: ${allFiles?.length || 0} files found in ${this.repoRoot}`);
+      if ((!allFiles || allFiles.length === 0) && (this.config.indexing as any).use_git_backup !== false) {
+        try {
+          allFiles = getRepoFiles(this.repoRoot);
+          if (!allFiles || allFiles.length === 0) {
+            throw new Error('[Beacon] No files found via git backup.');
+          }
+        } catch (e) {
+          throw new Error('[Beacon] No files found via glob or git backup.');
+        }
+      }
+      if (!allFiles || allFiles.length === 0) {
+        // Emit a warning and proceed — watcher will index files as they are created.
+        // Do NOT clear the existing index when no files are found; the prior index
+        // remains valid and the watcher will update it as files appear.
+        log.warn("beacon", "No files found for indexing", { repoRoot: this.repoRoot, includePatterns: this.config.indexing.include?.length || 0, excludePatterns: this.config.indexing.exclude?.length || 0 });
+        await this.emitProgress({
+          phase: "discovering",
+          filesTotal: 0,
+          filesProcessed: 0,
+          chunksTotal: 0,
+          chunksProcessed: 0,
+          percent: 0,
+          message: "No files found. Watcher is active — files will be indexed as they appear."
+        });
+        // Set sync state to idle and return success (zero files indexed)
+        this.db.setSyncState("sync_status", "idle");
+        this.db.setSyncState("last_full_sync", new Date().toISOString());
+        return { success: true, filesIndexed: 0 };
+      }
+
+      // File discovery succeeded — safe to clear the existing index now.
+      await this.db.clear();
+      // Optimize DB for bulk writes during full reindex
+      this.db.beginFullReindex();
+
+      const filesToIndex = allFiles;
 
       this.db.setSyncState("total_files", String(filesToIndex.length));
       this.db.setSyncState("files_indexed", "0");
@@ -123,7 +168,7 @@ export class IndexCoordinator {
         message: `Found ${filesToIndex.length} files to index`,
       });
 
-      const filesIndexed = await this.indexFiles(filesToIndex, onProgress);
+      const filesIndexed = await this.indexFiles(filesToIndex, onProgress, true /* skipHnswRemove — index was just cleared */);
 
       this.db.setSyncState("last_full_sync", new Date().toISOString());
       this.db.setSyncState("sync_status", "idle");
@@ -166,10 +211,21 @@ export class IndexCoordinator {
       });
 
       throw error;
+    } finally {
+      this.db.endFullReindex();
+      this.isSyncing = false;
+      this.onRunningChange?.(false);
     }
   }
 
   async performDiffSync(): Promise<{ success: boolean; filesIndexed: number }> {
+    if (this.isSyncing) {
+      log.warn("beacon", "Sync already in progress, skipping concurrent request");
+      return { success: false, filesIndexed: 0 };
+    }
+    this.isSyncing = true;
+    this.onRunningChange?.(true);
+
     this.db.setSyncState("sync_status", "in_progress");
     this.db.setSyncState("sync_started_at", new Date().toISOString());
 
@@ -198,20 +254,32 @@ export class IndexCoordinator {
       this.db.setSyncState("total_files", String(filesToIndex.length));
       this.db.setSyncState("files_indexed", "0");
 
-      for (const file of filesToIndex) {
-        await this.db.deleteChunks(file);
-      }
+      // Parallelize deletion of old chunks for all modified files
+      await Promise.all(filesToIndex.map((file) => this.db.deleteChunks(file)));
 
       const filesIndexed = await this.indexFiles(filesToIndex);
 
-      const allTrackedFiles = getRepoFiles(this.repoRoot);
-      const indexedFiles = new Set(this.db.getIndexedFiles());
-
-      for (const indexedFile of indexedFiles) {
-        if (!allTrackedFiles.includes(indexedFile)) {
-          await this.db.deleteChunks(indexedFile);
+      let allTrackedFilesArr = getAllFilesViaGlob(
+        this.repoRoot,
+        this.config.indexing.include,
+        this.config.indexing.exclude
+      );
+      if ((!allTrackedFilesArr || allTrackedFilesArr.length === 0) && (this.config.indexing as any).use_git_backup !== false) {
+        try {
+          allTrackedFilesArr = getRepoFiles(this.repoRoot);
+        } catch (e) {
+          throw new Error('[Beacon] DiffSync: No files found via glob or git backup.');
         }
       }
+      if (!allTrackedFilesArr || allTrackedFilesArr.length === 0) {
+        throw new Error('[Beacon] DiffSync: No files found via glob or git.');
+      }
+      const allTrackedFiles = new Set(allTrackedFilesArr);
+      const indexedFiles = new Set(this.db.getIndexedFiles());
+
+      // Parallelize deletion of orphaned files
+      const orphans = Array.from(indexedFiles).filter((f) => !allTrackedFiles.has(f));
+      await Promise.all(orphans.map((f) => this.db.deleteChunks(f)));
 
       this.db.setSyncState("last_full_sync", new Date().toISOString());
       this.db.setSyncState("sync_status", "idle");
@@ -223,10 +291,13 @@ export class IndexCoordinator {
       this.db.setSyncState("sync_error", `Diff sync failed: ${errorMsg}`);
       this.db.setSyncState("sync_status", "error");
       throw error;
+    } finally {
+      this.isSyncing = false;
+      this.onRunningChange?.(false);
     }
   }
 
-  private async indexFiles(filePaths: string[], onProgress?: ProgressCallback): Promise<number> {
+  private async indexFiles(filePaths: string[], onProgress?: ProgressCallback, skipHnswRemove: boolean = false): Promise<number> {
     if (onProgress) {
       this.setProgressCallback(onProgress);
     }
@@ -238,7 +309,6 @@ export class IndexCoordinator {
 
     const totalFilePaths = filePaths.length;
     let filesProcessed = 0;
-    let globalChunksProcessed = 0;
 
     if (!this.useEmbeddings) {
       for (let i = 0; i < filePaths.length; i++) {
@@ -272,8 +342,8 @@ export class IndexCoordinator {
             continue;
           }
 
-          const placeholderEmbeddings = chunks.map(() => 
-            this.generatePlaceholderEmbedding(content)
+          const placeholderEmbeddings = chunks.map((c) =>
+            this.generatePlaceholderEmbedding(c.text)
           );
           
           await this.db.insertChunks(
@@ -288,7 +358,10 @@ export class IndexCoordinator {
           );
           
           filesProcessed++;
-          this.db.setSyncState("files_indexed", String(filesProcessed));
+          // Update DB progress counter every 10 files to avoid one DB write per file.
+          if (filesProcessed % 10 === 0 || filesProcessed === totalFilePaths) {
+            this.db.setSyncState("files_indexed", String(filesProcessed));
+          }
 
           const percent = Math.round((filesProcessed / totalFilePaths) * 100);
           await this.emitProgress({
@@ -300,56 +373,68 @@ export class IndexCoordinator {
             percent,
             message: `[${this.generateProgressBar(percent)}] ${percent}% (${filesProcessed}/${totalFilePaths} files)`,
           });
-        } catch {
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          log.error("beacon", `Failed to index ${filePath}`, { error: msg });
+          this.db.recordMetric("chunking_error", 1);
         }
       }
       
       return filesProcessed;
     }
 
-    const chunkedFiles: Array<{
-      path: string;
-      hash: string;
-      chunks: Array<{ text: string; start_line: number; end_line: number }>;
-    }> = [];
+    // ── Streaming micro-batch pipeline ──────────────────────────────────
+    // Process files in micro-batches through the full chunk → embed → store
+    // pipeline. Each micro-batch's data is GC-eligible before the next starts,
+    // keeping peak memory at O(MICRO_BATCH_SIZE) instead of O(total_files).
+    //
+    // Batch size of 50 keeps ONNX worker utilisation high (~200-500 chunks per
+    // inference pass) while remaining within comfortable memory bounds.
+    // Chunking concurrency of 8 saturates the I/O subsystem (stat + readFile)
+    // without excessive open-fd pressure.
+    const MICRO_BATCH_SIZE = this.config.indexing.micro_batch_size ?? 100;
+    const chunkingConcurrency = this.config.indexing.chunking_concurrency ?? Math.max(8, cpus().length);
 
-    await this.emitProgress({
-      phase: "chunking",
-      filesTotal: totalFilePaths,
-      filesProcessed: 0,
-      chunksTotal: 0,
-      chunksProcessed: 0,
-      percent: 0,
-      message: `Reading and chunking ${totalFilePaths} files...`,
-    });
+    // Profiling accumulators
+    let totalChunksProcessed = 0;
+    let totalChunkingMs = 0;
+    let totalEmbeddingMs = 0;
+    let totalUpsertMs = 0;
+    let totalChunksCreated = 0;
 
-    const FILE_BATCH_SIZE = 50;
-    for (let batchStart = 0; batchStart < filePaths.length; batchStart += FILE_BATCH_SIZE) {
+    for (let batchStart = 0; batchStart < filePaths.length; batchStart += MICRO_BATCH_SIZE) {
       if (shouldTerminate(this.db)) {
         throw Object.assign(new Error("Indexing terminated by user"), { name: "AbortError" });
       }
 
-      const batchEnd = Math.min(batchStart + FILE_BATCH_SIZE, filePaths.length);
-      const batchResults = await Promise.all(
-        filePaths.slice(batchStart, batchEnd).map(async (filePath): Promise<{path: string, hash: string, chunks: Array<{text: string, start_line: number, end_line: number}>} | null> => {
-          try {
-            const fullPath = join(this.repoRoot, filePath);
-            const stat = await statAsync(fullPath);
-            
-            if (stat.size / 1024 > maxFileSizeKb) {
-              return null;
-            }
+      const batchEnd = Math.min(batchStart + MICRO_BATCH_SIZE, filePaths.length);
+      const batchFilePaths = filePaths.slice(batchStart, batchEnd);
 
-            const content = await readFileAsync(fullPath, "utf-8");
-            const hash = getFileHash(content);
-            const storedHash = this.db.getFileHash(filePath);
-            
-            if (storedHash === hash) {
-              return null;
-            }
+      // ── Phase 1: Chunk this micro-batch ────────────────────────────
+      const chunkingStart = Date.now();
+      const chunkedFiles: Array<{
+        path: string;
+        hash: string;
+        chunks: Array<{ text: string; start_line: number; end_line: number }>;
+      }> = [];
 
-            const chunks = chunkCode(content, maxTokens, overlapTokens, contextLimit);
-            if (chunks.length > 0) {
+      for (let ci = 0; ci < batchFilePaths.length; ci += chunkingConcurrency) {
+        const concurrentSlice = batchFilePaths.slice(ci, Math.min(ci + chunkingConcurrency, batchFilePaths.length));
+        const results = await Promise.all(
+          concurrentSlice.map(async (filePath): Promise<{path: string, hash: string, chunks: Array<{text: string, start_line: number, end_line: number}>} | null> => {
+            try {
+              const fullPath = join(this.repoRoot, filePath);
+              const stat = await statAsync(fullPath);
+              if (stat.size / 1024 > maxFileSizeKb) return null;
+
+              const content = await readFileAsync(fullPath, "utf-8");
+              const hash = getFileHash(content);
+              const storedHash = this.db.getFileHash(filePath);
+              if (storedHash === hash) return null;
+
+              const chunks = chunkCode(content, maxTokens, overlapTokens, contextLimit);
+              if (chunks.length === 0) return null;
+
               return {
                 path: filePath,
                 hash,
@@ -359,182 +444,153 @@ export class IndexCoordinator {
                   end_line: c.end_line,
                 })),
               };
+            } catch (err: unknown) {
+              log.error("beacon", `Failed to chunk ${filePath}`, { error: err instanceof Error ? err.message : String(err) });
+              this.db.recordMetric("chunking_error", 1);
+              return null;
             }
-            return null;
-          } catch {
-            return null;
-          }
-        })
-      );
-
-      for (const result of batchResults) {
-        if (result) {
-          chunkedFiles.push(result);
+          })
+        );
+        for (const r of results) {
+          if (r) chunkedFiles.push(r);
         }
       }
+      totalChunkingMs += Date.now() - chunkingStart;
 
-      const i = batchEnd;
-      if (i % 100 === 0 || batchEnd === filePaths.length) {
-        const percent = Math.round((batchEnd / totalFilePaths) * 30);
+      if (chunkedFiles.length === 0) {
+        // Emit progress even for empty micro-batches
+        const percent = Math.round((batchEnd / totalFilePaths) * 100);
         await this.emitProgress({
           phase: "chunking",
           filesTotal: totalFilePaths,
           filesProcessed: batchEnd,
-          chunksTotal: chunkedFiles.reduce((sum, f) => sum + f.chunks.length, 0),
-          chunksProcessed: 0,
+          chunksTotal: 0,
+          chunksProcessed: totalChunksProcessed,
           percent,
-          message: `[${this.generateProgressBar(percent)}] Chunking... (${batchEnd}/${totalFilePaths} files)`,
+          message: `[${this.generateProgressBar(percent)}] ${percent}% (${batchEnd}/${totalFilePaths} files scanned)`,
         });
+        continue;
       }
 
-      if (batchEnd < filePaths.length) {
-        await new Promise((resolve) => setImmediate(resolve));
-      }
-    }
+      const batchChunkCount = chunkedFiles.reduce((sum, f) => sum + f.chunks.length, 0);
+      totalChunksCreated += batchChunkCount;
 
-    if (chunkedFiles.length === 0) {
-      return 0;
-    }
+      // ── Phase 2: Embed this micro-batch ────────────────────────────
+      // Collect ALL texts from ALL files in the micro-batch into one flat array,
+      // then send to embedDocuments() in a single call.  This gives the ONNX
+      // session a much larger batch tensor (e.g. 300–600 texts at once instead
+      // of ~15 per file), which is far more efficient for both CPU and GPU.
+      // After the call, slice the flat results back per-file using the offsets.
+      const embeddingStart = Date.now();
+      const fileEmbeddings = new Map<string, number[][]>();
+      let batchChunksEmbedded = 0;
 
-    const totalChunks = chunkedFiles.reduce((sum, f) => sum + f.chunks.length, 0);
-    
-    await this.emitProgress({
-      phase: "embedding",
-      filesTotal: chunkedFiles.length,
-      filesProcessed: 0,
-      chunksTotal: totalChunks,
-      chunksProcessed: 0,
-      percent: 30,
-      message: `Embedding ${totalChunks} chunks from ${chunkedFiles.length} files...`,
-    });
-
-    const batchSize = Math.min(this.config.embedding.batch_size ?? 10, 20);
-    const { concurrency } = this.config.indexing;
-
-    const fileChunkEmbeddings = new Map<string, number[][]>();
-
-    for (let fileIdx = 0; fileIdx < chunkedFiles.length; fileIdx++) {
-      const file = chunkedFiles[fileIdx];
-      fileChunkEmbeddings.set(file.path, new Array(file.chunks.length).fill(null as unknown as number[]));
-    }
-
-    const processFileBatch = async (
-      files: typeof chunkedFiles,
-      startFileIdx: number
-    ): Promise<void> => {
-      if (shouldTerminate(this.db)) {
-        throw Object.assign(new Error("Indexing terminated by user"), { name: "AbortError" });
-      }
-
+      // Build flat text array and track per-file slice offsets
       const allTexts: string[] = [];
-      const textToFileInfo: Array<{ fileIdx: number; chunkIdx: number }> = [];
+      const fileOffsets: Array<{ path: string; start: number; count: number }> = [];
+      for (const file of chunkedFiles) {
+        const start = allTexts.length;
+        for (const c of file.chunks) allTexts.push(c.text);
+        fileOffsets.push({ path: file.path, start, count: file.chunks.length });
+      }
 
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-        for (let chunkIdx = 0; chunkIdx < file.chunks.length; chunkIdx++) {
-          allTexts.push(file.chunks[chunkIdx].text);
-          textToFileInfo.push({ fileIdx: startFileIdx + i, chunkIdx });
+      let flatEmbeddings: number[][];
+      try {
+        flatEmbeddings = await this.embedder.embedDocuments(allTexts);
+      } catch (embedErr: unknown) {
+        log.error("beacon", "Failed to embed micro-batch, falling back to per-file", { error: embedErr instanceof Error ? embedErr.message : String(embedErr) });
+        // Fall back to per-file embedding so we don't lose the entire batch
+        flatEmbeddings = [];
+        let offset = 0;
+        for (const file of chunkedFiles) {
+          const texts = file.chunks.map((c) => c.text);
+          let embeddings: number[][];
+          try {
+            embeddings = await this.embedder.embedDocuments(texts);
+          } catch {
+            embeddings = texts.map((t) => this.generatePlaceholderEmbedding(t));
+          }
+          fileEmbeddings.set(file.path, embeddings);
+          batchChunksEmbedded += texts.length;
+          offset += texts.length;
         }
       }
 
-      if (allTexts.length === 0) return;
-
-      const embeddings = await this.embedder.embedDocuments(allTexts);
-
-      for (let i = 0; i < textToFileInfo.length; i++) {
-        const { fileIdx, chunkIdx } = textToFileInfo[i];
-        const file = chunkedFiles[fileIdx];
-        fileChunkEmbeddings.get(file.path)![chunkIdx] = embeddings[i];
+      // Slice flat results back per-file (only when the flat embed succeeded)
+      if (flatEmbeddings.length > 0) {
+        for (const { path, start, count } of fileOffsets) {
+          fileEmbeddings.set(path, flatEmbeddings.slice(start, start + count));
+          batchChunksEmbedded += count;
+        }
       }
 
-      globalChunksProcessed += allTexts.length;
-    };
+      // Yield to event loop after the (potentially long) inference call
+      await new Promise<void>((resolve) => setImmediate(resolve));
 
-    for (let i = 0; i < chunkedFiles.length; i += batchSize * concurrency) {
+      totalEmbeddingMs += Date.now() - embeddingStart;
+      totalChunksProcessed += batchChunksEmbedded;
+
+      // ── Phase 3: Store this micro-batch ────────────────────────────
+      // P5: Single transaction + single HNSW addVectorBatch for all files in
+      // the micro-batch, eliminating N separate WAL writes and N HNSW graph
+      // traversals per batch.  Falls back to per-file insertChunks() on error.
       if (shouldTerminate(this.db)) {
         throw Object.assign(new Error("Indexing terminated by user"), { name: "AbortError" });
       }
 
-      const batchGroup: Array<{ files: typeof chunkedFiles; startFileIdx: number }> = [];
-      
-      for (let j = 0; j < concurrency; j++) {
-        const startIdx = i + j * batchSize;
-        if (startIdx >= chunkedFiles.length) break;
-        
-        const endIdx = Math.min(startIdx + batchSize, chunkedFiles.length);
-        batchGroup.push({
-          files: chunkedFiles.slice(startIdx, endIdx),
-          startFileIdx: startIdx,
-        });
-      }
+      const upsertStart = Date.now();
+      const batchInput = chunkedFiles
+        .map((file) => {
+          const embeddings = fileEmbeddings.get(file.path);
+          if (!embeddings || !embeddings.every((e) => e != null)) return null;
+          return { filePath: file.path, chunks: file.chunks, embeddings, fileHash: file.hash };
+        })
+        .filter((x): x is NonNullable<typeof x> => x !== null);
 
-      try {
-        await Promise.all(
-          batchGroup.map((batch) => processFileBatch(batch.files, batch.startFileIdx))
-        );
-      } catch (error) {
-        console.error(`[Beacon] Batch embedding failed:`, error);
-        fileChunkEmbeddings.clear();
-        throw error;
+      if (batchInput.length > 0) {
+        try {
+          await this.db.insertChunksBatch(batchInput, skipHnswRemove);
+          filesProcessed += batchInput.length;
+          this.db.setSyncState("files_indexed", String(filesProcessed));
+        } catch (err) {
+          log.error("beacon", "insertChunksBatch failed for micro-batch", { error: err instanceof Error ? err.message : String(err) });
+          this.db.recordMetric("upsert_error", 1);
+        }
       }
+      totalUpsertMs += Date.now() - upsertStart;
 
-      const percent = 30 + Math.round((globalChunksProcessed / totalChunks) * 50);
+      // Micro-batch complete — chunkedFiles, fileEmbeddings, allTexts, textMapping
+      // are now all GC-eligible as we loop to the next micro-batch.
+
+      // Emit cumulative progress
+      const percent = Math.round((batchEnd / totalFilePaths) * 100);
       await this.emitProgress({
         phase: "embedding",
-        filesTotal: chunkedFiles.length,
-        filesProcessed: 0,
-        chunksTotal: totalChunks,
-        chunksProcessed: globalChunksProcessed,
+        filesTotal: totalFilePaths,
+        filesProcessed: batchEnd,
+        chunksTotal: totalChunksCreated,
+        chunksProcessed: totalChunksProcessed,
         percent,
-        message: `[${this.generateProgressBar(percent)}] ${percent}% (${globalChunksProcessed}/${totalChunks} chunks embedded)`,
+        message: `[${this.generateProgressBar(percent)}] ${percent}% (${filesProcessed} files indexed, ${totalChunksProcessed} chunks embedded)`,
       });
+
+      // Update DB progress counter
+      this.db.setSyncState("files_indexed", String(filesProcessed));
+
+      // Yield to event loop between micro-batches
+      await new Promise((resolve) => setImmediate(resolve));
     }
 
-    await this.emitProgress({
-      phase: "storing",
-      filesTotal: chunkedFiles.length,
-      filesProcessed: 0,
-      chunksTotal: totalChunks,
-      chunksProcessed: globalChunksProcessed,
-      percent: 80,
-      message: `Storing embeddings in database...`,
-    });
-
-    for (let i = 0; i < chunkedFiles.length; i++) {
-      if (shouldTerminate(this.db)) {
-        throw Object.assign(new Error("Indexing terminated by user"), { name: "AbortError" });
-      }
-
-      if (i % YIELD_INTERVAL === 0) {
-        await new Promise((resolve) => setImmediate(resolve));
-      }
-
-      const file = chunkedFiles[i];
-      const embeddings = fileChunkEmbeddings.get(file.path);
-
-      if (embeddings && embeddings.every((e) => e !== null)) {
-        try {
-          await this.db.insertChunks(file.path, file.chunks, embeddings as number[][], file.hash);
-          filesProcessed++;
-          this.db.setSyncState("files_indexed", String(filesProcessed));
-
-          const percent = Math.min(100, 80 + Math.round((filesProcessed / chunkedFiles.length) * 20));
-          await this.emitProgress({
-            phase: "storing",
-            filesTotal: chunkedFiles.length,
-            filesProcessed,
-            chunksTotal: totalChunks,
-            chunksProcessed: globalChunksProcessed,
-            percent,
-            message: `[${this.generateProgressBar(percent)}] ${percent}% (${filesProcessed}/${chunkedFiles.length} files stored)`,
-          });
-        } catch (err) {
-          console.error(`Failed to insert ${file.path}:`, err);
-        }
-      }
-
-      fileChunkEmbeddings.delete(file.path);
-    }
+    // Record aggregate profiling metrics
+    const totalElapsedSec = Math.max((totalChunkingMs + totalEmbeddingMs + totalUpsertMs) / 1000, 0.001);
+    this.db.recordMetric("chunking_latency_ms", totalChunkingMs);
+    this.db.recordMetric("embedding_latency_ms", totalEmbeddingMs);
+    this.db.recordMetric("upsert_latency_ms", totalUpsertMs);
+    this.db.recordMetric("chunking_throughput_files", filesProcessed / Math.max(totalChunkingMs / 1000, 0.001));
+    this.db.recordMetric("chunking_throughput_chunks", totalChunksCreated / Math.max(totalChunkingMs / 1000, 0.001));
+    this.db.recordMetric("embedding_throughput_chunks", totalChunksProcessed / Math.max(totalEmbeddingMs / 1000, 0.001));
+    this.db.recordMetric("upsert_throughput_files", filesProcessed / Math.max(totalUpsertMs / 1000, 0.001));
+    this.db.recordMetric("upsert_throughput_chunks", totalChunksProcessed / Math.max(totalUpsertMs / 1000, 0.001));
 
     return filesProcessed;
   }
@@ -550,7 +606,7 @@ export class IndexCoordinator {
     const embedding = new Float32Array(dims);
     
     const hash = simpleHash(text);
-    const seed = hash % 2147483647;
+    const seed = (hash % 2147483647) || 1; // Avoid degenerate zero seed
     let rng = seed;
     
     for (let i = 0; i < dims; i++) {
@@ -613,11 +669,11 @@ export class IndexCoordinator {
       if (this.useEmbeddings) {
         embeddings = await this.embedder.embedDocuments(texts);
       } else {
-        embeddings = texts.map(() => this.generatePlaceholderEmbedding(content));
+        embeddings = texts.map((text) => this.generatePlaceholderEmbedding(text));
       }
 
-      await this.db.deleteChunks(filePath);
-
+      // Insert new chunks before deleting old ones so the file is never absent
+      // from the index during the update window (atomicity via upsert semantics).
       await this.db.insertChunks(
         filePath,
         chunks.map((c) => ({
@@ -633,28 +689,39 @@ export class IndexCoordinator {
     } catch (error: unknown) {
       const errorMsg =
         error instanceof Error ? error.message : String(error);
-      console.error(`Failed to reembed ${filePath}: ${errorMsg}`);
+      log.error("beacon", `Failed to reembed ${filePath}`, { error: errorMsg });
       return false;
     }
   }
 
   async garbageCollect(): Promise<number> {
     try {
-      const allTrackedFiles = new Set(getRepoFiles(this.repoRoot));
-      const indexedFiles = this.db.getIndexedFiles();
-
-      let deletedCount = 0;
-
-      for (const indexedFile of indexedFiles) {
-        if (!allTrackedFiles.has(indexedFile)) {
-          await this.db.deleteChunks(indexedFile);
-          deletedCount++;
+      let allTrackedFilesArr = getAllFilesViaGlob(
+        this.repoRoot,
+        this.config.indexing.include,
+        this.config.indexing.exclude
+      );
+      if ((!allTrackedFilesArr || allTrackedFilesArr.length === 0) && (this.config.indexing as any).use_git_backup !== false) {
+        try {
+          allTrackedFilesArr = getRepoFiles(this.repoRoot);
+        } catch (e) {
+          throw new Error('[Beacon] GarbageCollect: No files found via glob or git backup.');
         }
       }
+      if (!allTrackedFilesArr || allTrackedFilesArr.length === 0) {
+        throw new Error('[Beacon] GarbageCollect: No files found via glob or git.');
+      }
+      const allTrackedFiles = new Set(allTrackedFilesArr);
+      const indexedFiles = this.db.getIndexedFiles();
 
-      return deletedCount;
+      const orphans = indexedFiles.filter((f) => !allTrackedFiles.has(f));
+
+      // Parallelize deletion of orphaned file chunks
+      await Promise.all(orphans.map((f) => this.db.deleteChunks(f)));
+
+      return orphans.length;
     } catch (error: unknown) {
-      console.error("Garbage collection failed:", error);
+      log.error("beacon", "Garbage collection failed", { error: error instanceof Error ? error.message : String(error) });
       return 0;
     }
   }
@@ -667,13 +734,14 @@ export function initializeIndexing(
   coordinator: IndexCoordinator;
   db: BeaconDatabase;
 } {
-  const storageDir = join(repoRoot, config.storage.path);
+  // config.storage.path is already the full absolute path (set lazily by loadConfig)
+  const storageDir = config.storage.path;
   if (!existsSync(storageDir)) {
     mkdirSync(storageDir, { recursive: true });
   }
 
   const dbPath = join(storageDir, "embeddings.db");
-  const db = new BeaconDatabase(dbPath, config.embedding.dimensions);
+  const db = new BeaconDatabase(dbPath, config.embedding.dimensions, true, config.storage.hnsw_max_elements);
 
   const effectiveContextLimit = config.embedding.context_limit ?? config.chunking.max_tokens;
   const embedder = new Embedder(config.embedding, effectiveContextLimit, storageDir);

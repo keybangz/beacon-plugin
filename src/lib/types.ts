@@ -17,10 +17,26 @@ export interface EmbeddingConfig {
   batch_size: number;
   /** Prefix to prepend to search queries */
   query_prefix: string;
+  /**
+   * Prefix to prepend to documents during indexing.
+   * Nominal embed v1.5 requires "search_document: " for indexed content and
+   * "search_query: " for queries. Other models typically leave this empty.
+   */
+  document_prefix?: string;
   /** Model context limit in tokens (for hard-truncation). Defaults to 256. */
   context_limit?: number;
   /** Enable/disable embedding generation. When false, uses BM25-only search. */
   enabled?: boolean;
+  /**
+   * ONNX execution provider for local models.
+   * - "cpu"      — always available (default)
+   * - "cuda"     — NVIDIA GPU via CUDA 12 (requires onnxruntime-node with CUDA binaries)
+   * - "rocm"     — AMD GPU via ROCm
+   * - "webgpu"   — WebGPU via WASM (available in Node 20+)
+   */
+  execution_provider?: "cpu" | "cuda" | "rocm" | "webgpu";
+  /** Timeout for embedding requests in milliseconds */
+  timeout_ms?: number;
 }
 
 export interface ChunkingConfig {
@@ -45,6 +61,18 @@ export interface IndexingConfig {
   max_files: number;
   /** Parallel indexing concurrency */
   concurrency: number;
+  /** Use git to backup index state */
+  use_git_backup?: boolean;
+  /** Stability delay in ms for file watcher (debounce) */
+  watcher_stability_ms?: number;
+  /** Poll interval in ms for file watcher */
+  watcher_poll_interval?: number;
+  /** Maximum directory depth for file watcher */
+  watcher_depth?: number;
+  /** Micro-batch size for processing files */
+  micro_batch_size?: number;
+  /** Concurrency for chunking operations */
+  chunking_concurrency?: number;
 }
 
 export interface HybridSearchWeights {
@@ -87,6 +115,8 @@ export interface RerankingConfig {
 export interface StorageConfig {
   /** Path to database directory */
   path: string;
+  /** Maximum number of elements in HNSW index */
+  hnsw_max_elements?: number;
 }
 
 export interface BeaconConfig {

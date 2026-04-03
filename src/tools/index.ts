@@ -1,13 +1,9 @@
-/**
- * Beacon Index Visual Tool for OpenCode
- * Shows colored dashboard of index status
-
- */
-
-import { tool } from "@opencode-ai/plugin";
-import { getRepoRoot } from "../lib/repo-root.js";
+import { tool, type ToolDefinition } from "@opencode-ai/plugin";
+import { getBeaconRoot } from "../lib/repo-root.js";
 import { loadConfig } from "../lib/config.js";
 import { openDatabase } from "../lib/db.js";
+import { Embedder } from "../lib/embedder.js";
+import { connectionPool } from "../lib/pool.js";
 import { join } from "path";
 import { existsSync } from "fs";
 
@@ -22,7 +18,7 @@ const colors = {
   red: "\x1b[31m",
 };
 
-export default tool({
+const _export: ToolDefinition = tool({
   description:
     "Visual overview of Beacon index with dashboard - chunks, coverage, provider, file list",
   args: {
@@ -33,18 +29,33 @@ export default tool({
   },
   async execute(args: any, context: any): Promise<string> {
     try {
-      const repoRoot = getRepoRoot(context.worktree);
+      const repoRoot = getBeaconRoot(context.worktree);
       const config = loadConfig(repoRoot);
 
-      const dbPath = join(repoRoot, config.storage.path, "embeddings.db");
+      // Check in-memory running flag first — authoritative for this process.
+      const indexerRunning = connectionPool.isIndexerRunning(context.worktree);
+
+      const dbPath = join(config.storage.path, "embeddings.db");
 
       if (!existsSync(dbPath)) {
+        const modelCheck = Embedder.checkModelDownloaded(config.embedding, config.storage.path);
+        const modelDownloaded = modelCheck ? modelCheck.downloaded : null;
         return JSON.stringify({
-          status: "not_indexed",
-          message: "Index not found. Run the reindex tool to create the index.",
+          status: indexerRunning ? "indexing" : "not_indexed",
+          indexer_running: indexerRunning,
+          ...(indexerRunning && {
+            indexer_message: "Indexer is currently running (auto-index on startup). The index will be available once it completes.",
+          }),
+          message: indexerRunning
+            ? "Indexing in progress — check back shortly or call status for progress."
+            : "Index not found. Run the reindex tool to create the index.",
           files_indexed: 0,
           total_chunks: 0,
           embedding_model: config.embedding.model,
+          model_downloaded: modelDownloaded,
+          ...(modelDownloaded === false && {
+            model_warning: `Model '${config.embedding.model}' is not downloaded. Run the 'downloadModels' tool with model='${config.embedding.model}' before indexing.`,
+          }),
         });
       }
 
@@ -54,6 +65,11 @@ export default tool({
         // Get index statistics
         const stats = db.getStats();
         const syncProgress = db.getSyncProgress();
+        const modelCheck = Embedder.checkModelDownloaded(config.embedding, config.storage.path);
+        const modelDownloaded = modelCheck ? modelCheck.downloaded : null;
+
+        // Merge in-memory flag with DB state.
+        const effectivelyRunning = indexerRunning || syncProgress.sync_status === "in_progress";
 
         // Format the dashboard
         const dashboard = [
@@ -67,12 +83,15 @@ export default tool({
         ];
 
         // Add sync status
-        if (syncProgress.sync_status === "in_progress") {
+        if (effectivelyRunning) {
           const filesMsg = syncProgress.files_indexed
             ? `${syncProgress.files_indexed}/${syncProgress.total_files}`
             : "...";
           dashboard.push(
             `${colors.bright}${colors.cyan}║${colors.reset}  ${colors.yellow}⟳ Sync Status:${colors.reset} In Progress (${filesMsg})${" ".repeat(8)}${colors.bright}${colors.cyan}║${colors.reset}`
+          );
+          dashboard.push(
+            `${colors.bright}${colors.cyan}║${colors.reset}  ${colors.yellow}⚠ Indexing — do not reindex!${colors.reset}${" ".repeat(10)}${colors.bright}${colors.cyan}║${colors.reset}`
           );
         } else if (syncProgress.sync_status === "error") {
           dashboard.push(
@@ -97,6 +116,17 @@ export default tool({
           );
         }
 
+        // Model download status row
+        if (modelDownloaded === false) {
+          dashboard.push(
+            `${colors.bright}${colors.cyan}║${colors.reset}  ${colors.red}✗ Model Not Downloaded:${colors.reset} run downloadModels  ${colors.bright}${colors.cyan}║${colors.reset}`
+          );
+        } else if (modelDownloaded === true) {
+          dashboard.push(
+            `${colors.bright}${colors.cyan}║${colors.reset}  ${colors.green}✓ Model Downloaded${colors.reset}${" ".repeat(22)}${colors.bright}${colors.cyan}║${colors.reset}`
+          );
+        }
+
         dashboard.push(
           `${colors.bright}${colors.cyan}╚════════════════════════════════════════╝${colors.reset}`
         );
@@ -115,8 +145,16 @@ export default tool({
             chunking_strategy: config.chunking.strategy,
             max_chunk_tokens: config.chunking.max_tokens,
           },
+          model_downloaded: modelDownloaded,
+          ...(modelDownloaded === false && {
+            model_warning: `Model '${config.embedding.model}' is not downloaded. Run the 'downloadModels' tool with model='${config.embedding.model}' to enable vector search. Current searches fall back to BM25-only.`,
+          }),
           sync: {
             status: syncProgress.sync_status,
+            indexer_running: effectivelyRunning,
+            ...(effectivelyRunning && {
+              indexer_message: "An indexing operation is currently in progress. Do not run reindex until it completes. Call terminateIndexer to stop it early.",
+            }),
             started_at: syncProgress.sync_started_at,
             files_indexed: syncProgress.files_indexed,
             total_files: syncProgress.total_files,
@@ -147,3 +185,4 @@ export default tool({
     }
   },
 });
+export default _export;

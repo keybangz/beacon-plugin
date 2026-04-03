@@ -1,19 +1,11 @@
-/**
- * Beacon Whitelist Tool for OpenCode
- * Allow indexing in otherwise-blacklisted directories
-
- */
-
-import { tool } from "@opencode-ai/plugin";
-import { getRepoRoot } from "../lib/repo-root.js";
+import { tool, type ToolDefinition } from "@opencode-ai/plugin";
+import { getBeaconRoot } from "../lib/repo-root.js";
+import { invalidateConfigCache } from "../lib/config.js";
 import { join } from "path";
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
+import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync } from "fs";
 
 const WHITELIST_FILE = ".opencode/whitelist.json";
 
-/**
- * Load whitelist from file
- */
 function loadWhitelist(repoRoot: string): string[] {
   const whitelistPath = join(repoRoot, WHITELIST_FILE);
 
@@ -30,9 +22,6 @@ function loadWhitelist(repoRoot: string): string[] {
   }
 }
 
-/**
- * Save whitelist to file
- */
 function saveWhitelist(repoRoot: string, patterns: string[]): void {
   const whitelistPath = join(repoRoot, WHITELIST_FILE);
   const dir = join(repoRoot, ".opencode");
@@ -41,10 +30,13 @@ function saveWhitelist(repoRoot: string, patterns: string[]): void {
     mkdirSync(dir, { recursive: true });
   }
 
-  writeFileSync(whitelistPath, JSON.stringify(patterns, null, 2), "utf-8");
+  // Atomic write: write to a temp file then rename to prevent corruption on crash.
+  const tmpPath = `${whitelistPath}.tmp`;
+  writeFileSync(tmpPath, JSON.stringify(patterns, null, 2), "utf-8");
+  renameSync(tmpPath, whitelistPath);
 }
 
-export default tool({
+const _export: ToolDefinition = tool({
   description:
     "Manage whitelist - allow indexing in specific directories even if they match blacklist patterns",
   args: {
@@ -59,7 +51,7 @@ export default tool({
   },
   async execute(args: any, context: any): Promise<string> {
     try {
-      const repoRoot = getRepoRoot(context.worktree);
+      const repoRoot = getBeaconRoot(context.worktree);
       const action = args.action ?? "list";
 
       if (action === "list") {
@@ -92,6 +84,7 @@ export default tool({
         patterns.push(args.path);
         patterns.sort();
         saveWhitelist(repoRoot, patterns);
+        invalidateConfigCache(repoRoot);
 
         return JSON.stringify({
           status: "success",
@@ -122,6 +115,7 @@ export default tool({
         }
 
         saveWhitelist(repoRoot, filteredPatterns);
+        invalidateConfigCache(repoRoot);
 
         return JSON.stringify({
           status: "success",
@@ -145,3 +139,4 @@ export default tool({
     }
   },
 });
+export default _export;

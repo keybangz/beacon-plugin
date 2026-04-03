@@ -1,14 +1,10 @@
-/**
- * Beacon Terminate Indexer Tool for OpenCode
- * Kills a running sync/index process using database flag
- */
-
 import { tool } from "@opencode-ai/plugin";
-import { getRepoRoot } from "../lib/repo-root.js";
+import { getBeaconRoot } from "../lib/repo-root.js";
 import { loadConfig } from "../lib/config.js";
 import { openDatabase } from "../lib/db.js";
 import { terminateIndexer, isIndexerRunning } from "../lib/sync.js";
 import { join } from "path";
+import { existsSync } from "fs";
 
 export default tool({
   description:
@@ -16,14 +12,20 @@ export default tool({
   args: {},
   async execute(_args: any, context: any): Promise<string> {
     try {
-      const repoRoot = getRepoRoot(context.worktree);
+      const repoRoot = getBeaconRoot(context.worktree);
       const config = loadConfig(repoRoot);
-      const storagePath = join(repoRoot, config.storage.path);
+      const storagePath = config.storage.path;
       const dbPath = join(storagePath, "embeddings.db");
-      
-      // Open database to check/set termination flag
+
+      if (!existsSync(dbPath)) {
+        return JSON.stringify({
+          status: "idle",
+          message: "No index found. No indexing operation is running.",
+        });
+      }
+
       const db = openDatabase(dbPath, config.embedding.dimensions);
-      
+
       try {
         if (!isIndexerRunning(db)) {
           return JSON.stringify({

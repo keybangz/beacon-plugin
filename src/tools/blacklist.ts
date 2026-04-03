@@ -1,19 +1,11 @@
-/**
- * Beacon Blacklist Tool for OpenCode
- * Manage directories excluded from indexing
-
- */
-
-import { tool } from "@opencode-ai/plugin";
-import { getRepoRoot } from "../lib/repo-root.js";
+import { tool, type ToolDefinition } from "@opencode-ai/plugin";
+import { getBeaconRoot } from "../lib/repo-root.js";
+import { invalidateConfigCache } from "../lib/config.js";
 import { join } from "path";
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
+import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync } from "fs";
 
 const BLACKLIST_FILE = ".opencode/blacklist.json";
 
-/**
- * Load blacklist from file
- */
 function loadBlacklist(repoRoot: string): string[] {
   const blacklistPath = join(repoRoot, BLACKLIST_FILE);
 
@@ -30,9 +22,6 @@ function loadBlacklist(repoRoot: string): string[] {
   }
 }
 
-/**
- * Save blacklist to file
- */
 function saveBlacklist(repoRoot: string, patterns: string[]): void {
   const blacklistPath = join(repoRoot, BLACKLIST_FILE);
   const dir = join(repoRoot, ".opencode");
@@ -41,10 +30,13 @@ function saveBlacklist(repoRoot: string, patterns: string[]): void {
     mkdirSync(dir, { recursive: true });
   }
 
-  writeFileSync(blacklistPath, JSON.stringify(patterns, null, 2), "utf-8");
+  // Atomic write: write to a temp file then rename to prevent corruption on crash.
+  const tmpPath = `${blacklistPath}.tmp`;
+  writeFileSync(tmpPath, JSON.stringify(patterns, null, 2), "utf-8");
+  renameSync(tmpPath, blacklistPath);
 }
 
-export default tool({
+const _export: ToolDefinition = tool({
   description:
     "Manage blacklist - prevent indexing of specific directories (e.g., secrets, vendor code)",
   args: {
@@ -59,7 +51,7 @@ export default tool({
   },
   async execute(args: any, context: any): Promise<string> {
     try {
-      const repoRoot = getRepoRoot(context.worktree);
+      const repoRoot = getBeaconRoot(context.worktree);
       const action = args.action ?? "list";
 
       if (action === "list") {
@@ -92,6 +84,7 @@ export default tool({
         patterns.push(args.path);
         patterns.sort();
         saveBlacklist(repoRoot, patterns);
+        invalidateConfigCache(repoRoot);
 
         return JSON.stringify({
           status: "success",
@@ -122,6 +115,7 @@ export default tool({
         }
 
         saveBlacklist(repoRoot, filteredPatterns);
+        invalidateConfigCache(repoRoot);
 
         return JSON.stringify({
           status: "success",
@@ -145,3 +139,4 @@ export default tool({
     }
   },
 });
+export default _export;

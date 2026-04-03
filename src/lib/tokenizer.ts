@@ -1,7 +1,7 @@
 import { simpleHash } from "./hash.js";
 
 const IDENTIFIER_PATTERNS = [
-  /\b(?:function|class|const|let|var|async|static)\s+([a-zA-Z_$][a-zA-Z0-9_$]*)/g,
+  /\b(?:function|class|const|let|var|async|static|interface|type|enum)\s+([a-zA-Z_$][a-zA-Z0-9_$]*)/g,
   /import\s+(?:\{[^}]*\}|\*\s+as\s+[a-zA-Z_$][a-zA-Z0-9_$]*|[a-zA-Z_$][a-zA-Z0-9_$]*)/g,
   /from\s+['"]([^'"]+)['"]/g,
   /(?:^|\s)([a-zA-Z_$][a-zA-Z0-9_$]*)\s*(?:=|:|\()/gm,
@@ -18,23 +18,85 @@ const COMMON_KEYWORDS = new Set([
 ]);
 
 const CODE_SYNONYMS: Record<string, string[]> = {
+  // Auth / access
   "auth": ["authentication", "login", "signin", "credential"],
   "authentication": ["auth", "login", "signin", "credential"],
+  // Database
   "db": ["database", "sql", "query", "storage"],
   "database": ["db", "sql", "query", "storage"],
+  // API / routing
   "api": ["endpoint", "route", "handler", "controller"],
   "handler": ["callback", "listener", "event", "api"],
+  // Config
   "config": ["configuration", "settings", "options", "env"],
-  "error": ["exception", "error", "fail", "throw"],
-  "exception": ["error", "exception", "fail", "throw"],
-  "test": ["spec", "testing", "unittest", "vitest"],
+  "cfg": ["config", "configuration", "settings", "options"],
+  "configuration": ["config", "cfg", "settings", "options"],
+  "settings": ["config", "cfg", "configuration", "options"],
+  // Errors
+  "error": ["exception", "err", "fail", "throw"],
+  "exception": ["error", "err", "fail", "throw"],
+  "err": ["error", "exception", "fail"],
+  // Testing
+  "test": ["spec", "testing", "unittest", "vitest", "jest"],
+  "spec": ["test", "testing", "unittest"],
+  // Utilities
   "util": ["utility", "helper", "tool", "lib"],
+  "utility": ["util", "helper", "tool"],
+  "helper": ["util", "utility", "tool"],
+  // Async / concurrency
   "async": ["asynchronous", "promise", "await", "callback"],
+  "cb": ["callback", "handler", "listener"],
+  "callback": ["cb", "handler", "listener", "async"],
+  // HTTP
   "http": ["request", "response", "fetch", "api"],
+  "req": ["request", "http", "fetch"],
+  "res": ["response", "http", "result"],
+  "request": ["req", "http", "fetch"],
+  "response": ["res", "http", "result"],
+  // Cache / memory
   "cache": ["cached", "memoize", "store", "memory"],
+  "mem": ["memory", "cache", "buffer"],
+  "memory": ["mem", "cache", "store"],
+  "buf": ["buffer", "data", "bytes"],
+  "buffer": ["buf", "data", "bytes"],
+  // Search / index
   "vector": ["embedding", "semantic", "similarity"],
+  "embedding": ["vector", "semantic", "similarity"],
   "search": ["find", "query", "lookup", "match"],
   "index": ["indexed", "indices", "catalog", "directory"],
+  // Context
+  "ctx": ["context", "scope", "env"],
+  "context": ["ctx", "scope"],
+  // Message / string
+  "msg": ["message", "payload", "data"],
+  "message": ["msg", "payload", "event"],
+  "str": ["string", "text", "chars"],
+  "string": ["str", "text", "chars"],
+  // Number / count
+  "num": ["number", "count", "int", "integer"],
+  "number": ["num", "count", "int"],
+  "len": ["length", "count", "size"],
+  "length": ["len", "count", "size"],
+  // Value / result
+  "val": ["value", "result", "data"],
+  "value": ["val", "result", "data"],
+  // Index / pointer
+  "idx": ["index", "position", "offset"],
+  "ptr": ["pointer", "reference", "ref"],
+  "ref": ["reference", "ptr", "pointer"],
+  // Initialize
+  "init": ["initialize", "setup", "start", "bootstrap"],
+  "initialize": ["init", "setup", "start"],
+  "setup": ["init", "initialize", "configure"],
+  // Function
+  "fn": ["function", "method", "handler"],
+  "func": ["function", "method", "handler"],
+  "function": ["fn", "func", "method"],
+  "method": ["fn", "func", "function"],
+  // Connection / pool
+  "conn": ["connection", "socket", "link"],
+  "connection": ["conn", "socket", "link"],
+  "pool": ["connection", "conn", "resources"],
 };
 
 const identifierCache = new Map<string, Set<string>>();
@@ -146,8 +208,10 @@ const FILE_TYPE_MULTIPLIERS: Record<string, number> = {
   ts: 1.2, tsx: 1.2,
   js: 1.0, jsx: 1.0,
   py: 1.1,
-  java: 1.0, go: 1.0, rs: 1.0, rb: 1.0,
-  md: 0.8,
+  java: 1.0, go: 1.0, rs: 1.0, rb: 1.0, cs: 1.0, cpp: 1.0, c: 1.0,
+  json: 1.0, jsonc: 1.0, yaml: 0.9, yml: 0.9,
+  md: 0.9, mdx: 0.9,
+  sh: 0.9, bash: 0.9,
 };
 
 export function getFileTypeMultiplier(filePath: string): number {
@@ -160,11 +224,14 @@ export function getIdentifierBoost(identifierMatches: number, identifierBoost: n
   return 1.0 + identifierMatches * (identifierBoost - 1.0);
 }
 
-const FTS_SPECIAL_CHARS = /[:"()'*]/g;
+// FTS5 operator characters that must be stripped before building a query.
+// Includes: quote, colon, parens, single-quote, asterisk, plus, minus, caret, tilde.
+const FTS_SPECIAL_CHARS = /[:"()'*+\-^~]/g;
 
 export function prepareFTSQuery(query: string): string {
   const prepared = query.replace(FTS_SPECIAL_CHARS, " ");
-  const words = prepared.split(/\s+/).filter((w) => w.length > 0);
+  // Filter out words shorter than 2 chars to avoid noise in FTS results
+  const words = prepared.split(/\s+/).filter((w) => w.length >= 2);
 
   if (words.length === 0) return "";
 
@@ -172,7 +239,14 @@ export function prepareFTSQuery(query: string): string {
     return `${words[0]}*`;
   }
 
-  return words.join(" OR ");
+  // For 2-6 words, use AND (all terms must co-occur) — much more precise than OR.
+  // For >6 words (long natural-language queries), fall back to OR to avoid
+  // over-constraining FTS and returning zero results.
+  if (words.length <= 6) {
+    return words.map((w) => `${w}*`).join(" AND ");
+  }
+
+  return words.map((w) => `${w}*`).join(" OR ");
 }
 
 export function clearCaches(): void {
@@ -241,7 +315,7 @@ export function buildExpandedQuery(query: string): {
   const codeTerms = extractCodeTerms(query);
   
   const allTerms = [...new Set([...expanded, ...codeTerms])];
-  const ftsQuery = allTerms.slice(0, 10).join(" OR ");
+  const ftsQuery = allTerms.slice(0, 20).join(" OR ");
   
   return {
     original: query,

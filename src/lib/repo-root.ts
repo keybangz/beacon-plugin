@@ -59,3 +59,27 @@ export function getRepoRoot(startPath?: string): string {
 
   return root;
 }
+
+/**
+ * Get repository root or fallback root
+ * Finds .git or defaults to project root (cwd) or user home
+ * @param startPath - Starting path for search
+ * @returns Path to repository root, or fallback
+ */
+export function getBeaconRoot(startPath?: string): string {
+  const repoRoot = findRepoRoot(startPath);
+  if (repoRoot) {
+    return repoRoot;
+  }
+  // Fallback to project root (cwd) if not a git repo
+  // Guard against filesystem root being used as a project root — it is never valid.
+  const isFilesystemRoot = (p: string) => p === "/" || p === "\\" || /^[A-Za-z]:[/\\]?$/.test(p);
+  if (startPath && typeof startPath === "string" && startPath.length > 0 && !isFilesystemRoot(startPath)) {
+    return startPath;
+  }
+  if (typeof process.cwd === "function") {
+    return process.cwd();
+  }
+  // Fallback to user home if all else fails
+  return process.env.HOME || process.env.USERPROFILE || "/tmp";
+}

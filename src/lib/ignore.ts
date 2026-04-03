@@ -2,15 +2,16 @@
  * File ignore pattern matching
  * Uses picomatch for glob pattern matching with memoized compiled matchers
  */
-
-import pm from "picomatch";
+import picomatch from "picomatch";
 
 /**
  * Memoized cache of compiled picomatch matchers keyed by a stable JSON key
  * of the pattern array. Avoids recompiling 20+ glob patterns for every file
  * during indexing (savings: ~400K compilations for 10K files × 20 patterns).
+ * Capped at MAX_MATCHER_CACHE_SIZE entries to prevent unbounded memory growth.
  */
 const matcherCache = new Map<string, (path: string) => boolean>();
+const MAX_MATCHER_CACHE_SIZE = 64;
 
 /**
  * Create (or retrieve from cache) a matcher function for glob patterns.
@@ -18,16 +19,21 @@ const matcherCache = new Map<string, (path: string) => boolean>();
  * @returns Function that returns true if path matches any pattern
  */
 function createMatcher(patterns: string[]): (path: string) => boolean {
-  // Use JSON.stringify as a stable key — pattern arrays are small so this is cheap
-  const cacheKey = JSON.stringify(patterns);
-  const cached = matcherCache.get(cacheKey);
-  if (cached) return cached;
-
-  const matchers = patterns.map((pattern) => pm(pattern, { dot: true }));
-  const matcher = (path: string): boolean => matchers.some((m) => m(path));
-
-  matcherCache.set(cacheKey, matcher);
-  return matcher;
+    // Use JSON.stringify as a stable key — pattern arrays are small so this is cheap
+    const cacheKey = JSON.stringify(patterns);
+    const cached = matcherCache.get(cacheKey);
+    if (cached)
+        return cached;
+    const matchers = patterns.map((pattern) => picomatch(pattern, { dot: true }));
+    const matcher = (path: string): boolean => matchers.some((m) => m(path));
+    // Evict oldest entry when the cache exceeds the size cap.
+    if (matcherCache.size >= MAX_MATCHER_CACHE_SIZE) {
+        const firstKey = matcherCache.keys().next().value;
+        if (firstKey !== undefined)
+            matcherCache.delete(firstKey);
+    }
+    matcherCache.set(cacheKey, matcher);
+    return matcher;
 }
 
 /**
@@ -38,19 +44,18 @@ function createMatcher(patterns: string[]): (path: string) => boolean {
  * @returns True if file should be indexed
  */
 export function shouldIndex(
-  filePath: string,
-  includePatterns: string[],
-  excludePatterns: string[]
+    filePath: string,
+    includePatterns: string[],
+    excludePatterns: string[]
 ): boolean {
-  // Check exclude patterns first
-  const excludeMatcher = createMatcher(excludePatterns);
-  if (excludeMatcher(filePath)) {
-    return false;
-  }
-
-  // Check include patterns
-  const includeMatcher = createMatcher(includePatterns);
-  return includeMatcher(filePath);
+    // Check exclude patterns first
+    const excludeMatcher = createMatcher(excludePatterns);
+    if (excludeMatcher(filePath)) {
+        return false;
+    }
+    // Check include patterns
+    const includeMatcher = createMatcher(includePatterns);
+    return includeMatcher(filePath);
 }
 
 /**
@@ -59,14 +64,13 @@ export function shouldIndex(
  * @throws Error if any pattern is invalid
  */
 export function validatePatterns(patterns: string[]): void {
-  for (const pattern of patterns) {
-    try {
-      // Test pattern compilation
-      pm(pattern, { dot: true });
-    } catch (error: unknown) {
-      throw new Error(
-        `Invalid glob pattern "${pattern}": ${error instanceof Error ? error.message : String(error)}`
-      );
+    for (const pattern of patterns) {
+        try {
+            // Test pattern compilation
+            picomatch(pattern, { dot: true });
+        }
+        catch (error) {
+            throw new Error(`Invalid glob pattern "${pattern}": ${error instanceof Error ? error.message : String(error)}`);
+        }
     }
-  }
 }

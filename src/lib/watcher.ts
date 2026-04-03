@@ -3,10 +3,8 @@ import { EventEmitter } from "events";
 import type { BeaconConfig } from "./types.js";
 import { shouldIndex } from "./ignore.js";
 
-export interface WatcherEvents {
-  add: (filePath: string) => void;
-  change: (filePath: string) => void;
-  unlink: (filePath: string) => void;
+export interface WatcherBatchEvents {
+  batch: (eventType: "add" | "change" | "unlink", filePaths: string[]) => void;
   error: (error: Error) => void;
 }
 
@@ -14,9 +12,26 @@ export class FileWatcher extends EventEmitter {
   private watcher: FSWatcher | null = null;
   private repoRoot: string;
   private config: BeaconConfig;
-  private debounceTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private debounceMs: number;
   private isRunning: boolean = false;
+
+  // Track batched file events
+  private batchEvents: Record<"add" | "change" | "unlink", Set<string>> = {
+    add: new Set(),
+    change: new Set(),
+    unlink: new Set(),
+  };
+
+  private batchTimer: ReturnType<typeof setTimeout> | null = null;
+  // Profiling metrics
+  private metrics = {
+    eventCounts: { add: 0, change: 0, unlink: 0 } as Record<string, number>,
+    batchCounts: { add: 0, change: 0, unlink: 0 } as Record<string, number>,
+    batchSizes: { add: 0, change: 0, unlink: 0 } as Record<string, number>,
+    batchLatencyMs: 0,
+    errorCount: 0,
+  };
+
 
   constructor(repoRoot: string, config: BeaconConfig, debounceMs: number = 500) {
     super();
@@ -25,38 +40,68 @@ export class FileWatcher extends EventEmitter {
     this.debounceMs = debounceMs;
   }
 
-  start(): void {
-    if (this.watcher) {
+  // New batching handler for file events
+  private handleBatchEvent(event: "add" | "change" | "unlink", filePath: string): void {
+    if (!shouldIndex(filePath, this.config.indexing.include, this.config.indexing.exclude)) {
       return;
     }
 
+    this.metrics.eventCounts[event]++;
+    this.batchEvents[event].add(filePath);
+
+    // Reset the debounce timer on every new event so the batch fires only
+    // after the debounce window has passed with no further activity.
+    if (this.batchTimer) {
+      clearTimeout(this.batchTimer);
+      this.batchTimer = null;
+    }
+    const start = Date.now();
+    this.batchTimer = setTimeout(() => {
+      // Compute latency once for the whole batch flush, not per event type.
+      const latencyMs = Date.now() - start;
+      this.metrics.batchLatencyMs = latencyMs;
+      (["add", "change", "unlink"] as const).forEach((etype) => {
+        const paths = Array.from(this.batchEvents[etype]);
+        if (paths.length > 0) {
+          this.metrics.batchCounts[etype]++;
+          this.metrics.batchSizes[etype] += paths.length;
+          this.emit("batch", etype, paths);
+          this.batchEvents[etype].clear();
+        }
+      });
+      this.batchTimer = null;
+    }, this.debounceMs);
+  }
+
+
+  start(): void {
+    if (this.isRunning) return;
     const includePatterns = this.config.indexing.include;
     const excludePatterns = this.config.indexing.exclude;
 
-    const combinedPatterns = [
-      ...includePatterns,
-      ...excludePatterns.map((p) => `!${p}`),
-    ];
-
-    this.watcher = chokidar.watch(combinedPatterns, {
+    this.watcher = chokidar.watch(includePatterns, {
       cwd: this.repoRoot,
+      ignored: excludePatterns.length > 0 ? excludePatterns : undefined,
       ignoreInitial: true,
       persistent: true,
       awaitWriteFinish: {
-        stabilityThreshold: 200,
-        pollInterval: 50,
+        stabilityThreshold: this.config.indexing.watcher_stability_ms ?? 200,
+        pollInterval: this.config.indexing.watcher_poll_interval ?? 50,
       },
       usePolling: false,
       alwaysStat: false,
-      depth: 50,
+      depth: this.config.indexing.watcher_depth ?? 50,
       ignorePermissionErrors: true,
     });
 
     this.watcher
-      .on("add", (filePath: string) => this.handleEvent("add", filePath))
-      .on("change", (filePath: string) => this.handleEvent("change", filePath))
-      .on("unlink", (filePath: string) => this.handleEvent("unlink", filePath))
-      .on("error", (error: unknown) => this.emit("error", error instanceof Error ? error : new Error(String(error))));
+      .on("add", (filePath: string) => this.handleBatchEvent("add", filePath))
+      .on("change", (filePath: string) => this.handleBatchEvent("change", filePath))
+      .on("unlink", (filePath: string) => this.handleBatchEvent("unlink", filePath))
+      .on("error", (error: unknown) => {
+        this.metrics.errorCount++;
+        this.emit("error", error instanceof Error ? error : new Error(String(error)));
+      });
 
     this.isRunning = true;
   }
@@ -66,12 +111,15 @@ export class FileWatcher extends EventEmitter {
       this.watcher.close();
       this.watcher = null;
     }
-
-    // Clear all debounce timers
-    for (const [filePath, timer] of this.debounceTimers) {
-      clearTimeout(timer);
+    // Clear batch timer
+    if (this.batchTimer) {
+      clearTimeout(this.batchTimer);
+      this.batchTimer = null;
     }
-    this.debounceTimers.clear();
+    // Clear all event sets
+    (["add", "change", "unlink"] as const).forEach((etype) => {
+      this.batchEvents[etype].clear();
+    });
     this.isRunning = false;
   }
 
@@ -79,51 +127,33 @@ export class FileWatcher extends EventEmitter {
     return this.isRunning && this.watcher !== null;
   }
 
-  private handleEvent(event: "add" | "change" | "unlink", filePath: string): void {
-    if (!shouldIndex(filePath, this.config.indexing.include, this.config.indexing.exclude)) {
-      return;
-    }
+  // Legacy handler removed: now replaced by batching logic
 
-    // Clear existing timer for this file
-    const existingTimer = this.debounceTimers.get(filePath);
-    if (existingTimer) {
-      clearTimeout(existingTimer);
-    }
 
-    // Create new debounce timer
-    const timer = setTimeout(() => {
-      this.debounceTimers.delete(filePath);
-      // Only emit if watcher is still active
-      if (this.isRunning) {
-        this.emit(event, filePath);
-      }
-    }, this.debounceMs);
-
-    // Prevent timer map from growing unbounded
-    if (this.debounceTimers.size > 1000) {
-      // Emergency cleanup: clear oldest entries
-      const entries = Array.from(this.debounceTimers.entries());
-      for (let i = 0; i < 100 && i < entries.length; i++) {
-        const [oldFilePath, oldTimer] = entries[i];
-        clearTimeout(oldTimer);
-        this.debounceTimers.delete(oldFilePath);
-      }
-    }
-
-    this.debounceTimers.set(filePath, timer);
-  }
-
-  async waitForReady(): Promise<void> {
+  async waitForReady(timeoutMs: number = 10000): Promise<void> {
     if (!this.watcher) {
       return;
     }
 
+    // Fallback for chokidar "ready" bug with empty folders
     return new Promise((resolve) => {
+      let resolved = false;
       const readyHandler = () => {
-        this.watcher?.off("ready", readyHandler);
-        resolve();
+        if (!resolved) {
+          this.watcher?.off("ready", readyHandler);
+          resolved = true;
+          resolve();
+        }
       };
       this.watcher!.on("ready", readyHandler);
+      // Fallback: resolve after timeout if "ready" never fires
+      setTimeout(() => {
+        if (!resolved) {
+          this.watcher?.off("ready", readyHandler);
+          resolved = true;
+          resolve();
+        }
+      }, timeoutMs);
     });
   }
 }
@@ -168,6 +198,7 @@ export async function getOrCreateWatcher(
 
     if (!entry) {
       const watcher = new FileWatcher(repoRoot, config);
+      watcher.start();
       entry = { watcher, refCount: 0 };
       activeWatchers.set(repoRoot, entry);
     }
@@ -214,7 +245,7 @@ export async function stopAllWatchers(): Promise<void> {
   const release = await acquireWatcherLock();
   
   try {
-    for (const entry of activeWatchers.values()) {
+    for (const entry of Array.from(activeWatchers.values())) {
       entry.watcher.stop();
     }
     activeWatchers.clear();
@@ -228,4 +259,13 @@ export function getWatcherStats(): { count: number; repos: string[] } {
     count: activeWatchers.size,
     repos: Array.from(activeWatchers.keys()),
   };
+}
+
+// For metrics reporting
+export function getWatcherProfilerStats(repoRoot: string): any {
+  const entry = activeWatchers.get(repoRoot);
+  if (entry && entry.watcher && (entry.watcher as any).metrics) {
+    return (entry.watcher as any).metrics;
+  }
+  return null;
 }
