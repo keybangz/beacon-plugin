@@ -1,27 +1,29 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, mock, spyOn } from 'bun:test';
 import { shouldIndex, validatePatterns } from '../src/lib/ignore.js';
 import pm from "picomatch";
 
 // Mock picomatch
-vi.mock("picomatch");
-const mockPm = pm as ReturnType<typeof vi.fn>;
+mock.module("picomatch", () => ({
+  default: mock((pattern: string) => {
+    // Check for invalid patterns and throw errors
+    if (pattern.includes('invalid[') && !pattern.endsWith(']')) {
+      throw new Error('Invalid syntax in pattern');
+    }
+    
+    // Simple mock implementation that matches basic patterns
+    if (pattern === '**/*.ts') return (filePath: string) => filePath.endsWith('.ts');
+    if (pattern === '**/*.js') return (filePath: string) => filePath.endsWith('.js');
+    if (pattern === 'node_modules/**') return (filePath: string) => filePath.includes('node_modules');
+    if (pattern === 'dist/**') return (filePath: string) => filePath.includes('dist');
+    return () => true; // Default: match everything
+  }),
+}));
+
+const mockPm = pm as unknown as (pattern: string) => (path: string) => boolean;
 
 describe('File Ignore Patterns', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
-    mockPm.mockImplementation((pattern: string) => {
-      // Check for invalid patterns and throw errors
-      if (pattern.includes('invalid[') && !pattern.endsWith(']')) {
-        throw new Error('Invalid syntax in pattern');
-      }
-      
-      // Simple mock implementation that matches basic patterns
-      if (pattern === '**/*.ts') return (filePath: string) => filePath.endsWith('.ts');
-      if (pattern === '**/*.js') return (filePath: string) => filePath.endsWith('.js');
-      if (pattern === 'node_modules/**') return (filePath: string) => filePath.includes('node_modules');
-      if (pattern === 'dist/**') return (filePath: string) => filePath.includes('dist');
-      return () => true; // Default: match everything
-    });
+    mock.restore();
   });
 
   describe('shouldIndex', () => {

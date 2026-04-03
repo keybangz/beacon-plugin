@@ -1,28 +1,28 @@
-import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, mock, spyOn } from 'bun:test';
 import { Embedder } from '../src/lib/embedder.js';
 import { EmbeddingConfig } from '../src/lib/types.js';
 
-vi.mock('../src/lib/onnx-embedder.js', () => ({
-  ONNXEmbedder: vi.fn().mockImplementation(() => ({
-    isInitialized: vi.fn().mockReturnValue(false),
-    initialize: vi.fn().mockResolvedValue({ ok: true }),
-    embed: vi.fn().mockResolvedValue([1, 2, 3]),
-    embedBatch: vi.fn().mockResolvedValue([[1, 2, 3], [4, 5, 6]]),
-    close: vi.fn(),
+mock.module('../src/lib/onnx-embedder.js', () => ({
+  ONNXEmbedder: mock(() => ({
+    isInitialized: mock(() => false),
+    initialize: mock(() => Promise.resolve({ ok: true })),
+    embed: mock(() => Promise.resolve([1, 2, 3])),
+    embedBatch: mock(() => Promise.resolve([[1, 2, 3], [4, 5, 6]])),
+    close: mock(() => undefined),
   })),
 }));
 
-vi.mock('fs', () => ({
-  existsSync: vi.fn().mockReturnValue(true),
-  mkdirSync: vi.fn(),
+mock.module('fs', () => ({
+  existsSync: mock(() => true),
+  mkdirSync: mock(() => undefined),
 }));
 
-vi.mock('os', () => ({
-  homedir: vi.fn().mockReturnValue('/mock/home'),
+mock.module('os', () => ({
+  homedir: mock(() => '/mock/home'),
 }));
 
-vi.mock('../src/lib/hash.js', () => ({
-  simpleHash: vi.fn().mockReturnValue(12345),
+mock.module('../src/lib/hash.js', () => ({
+  simpleHash: mock(() => 12345),
 }));
 
 describe('Embedder', () => {
@@ -30,7 +30,7 @@ describe('Embedder', () => {
   let mockConfig: EmbeddingConfig;
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    mock.restore();
     
     mockConfig = {
       api_base: 'https://api.example.com',
@@ -68,10 +68,10 @@ describe('Embedder', () => {
       const apiEmbedder = new Embedder({ ...mockConfig, api_base: 'https://api.example.com' });
       
       const originalFetch = global.fetch;
-      global.fetch = vi.fn().mockResolvedValueOnce({
+      global.fetch = mock(() => Promise.resolve({
         ok: true,
         status: 200,
-      });
+      }));
       
       const result = await apiEmbedder.ping();
       expect(result.ok).toBe(true);
@@ -83,11 +83,11 @@ describe('Embedder', () => {
       const apiEmbedder = new Embedder({ ...mockConfig, api_base: 'https://api.example.com' });
       
       const originalFetch = global.fetch;
-      global.fetch = vi.fn().mockResolvedValueOnce({
+      global.fetch = mock(() => Promise.resolve({
         ok: false,
         status: 500,
         statusText: 'Internal Server Error',
-      });
+      }));
       
       const result = await apiEmbedder.ping();
       expect(result.ok).toBe(false);
@@ -111,10 +111,10 @@ describe('Embedder', () => {
       const apiEmbedder = new Embedder({ ...mockConfig, api_base: 'https://api.example.com' });
       
       const originalFetch = global.fetch;
-      global.fetch = vi.fn().mockResolvedValueOnce({
+      global.fetch = mock(() => Promise.resolve({
         ok: true,
         json: () => Promise.resolve({ data: [{ embedding: [1, 2, 3] }] }),
-      });
+      }));
       
       const firstEmbedding = await apiEmbedder.embedQuery('test query');
       const secondEmbedding = await apiEmbedder.embedQuery('test query');
@@ -145,10 +145,10 @@ describe('Embedder', () => {
       const apiEmbedder = new Embedder({ ...mockConfig, api_base: 'https://api.example.com', batch_size: 2 });
       
       const originalFetch = global.fetch;
-      global.fetch = vi.fn().mockResolvedValueOnce({
+      global.fetch = mock(() => Promise.resolve({
         ok: true,
         json: () => Promise.resolve({ data: [{ embedding: [1, 2, 3] }, { embedding: [4, 5, 6] }] }),
-      });
+      }));
       
       const documents = ['doc1', 'doc2'];
       const embeddings = await apiEmbedder.embedDocuments(documents);

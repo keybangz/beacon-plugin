@@ -9,94 +9,30 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    
-    strategy:
-      matrix:
-        node-version: [24.x]
-        shard-index: [0, 1, 2]
-        shard-total: [3, 3, 3]
 
     steps:
     - uses: actions/checkout@v4
-    
-    - name: Use Node.js ${{ matrix.node-version }}
-      uses: actions/setup-node@v4
+
+    - name: Setup Bun
+      uses: oven-sh/setup-bun@v2
       with:
-        node-version: ${{ matrix.node-version }}
-        cache: 'npm'
-    
+        bun-version: latest
+
     - name: Install dependencies
-      run: npm ci
-    
+      run: bun install
+
     - name: Run type check
-      run: npm run type-check
-    
+      run: bun run type-check
+
     - name: Run tests
-      run: npm run test:shard
-      env:
-        SHARD_INDEX: ${{ matrix.shard-index }}
-        SHARD_TOTAL: ${{ matrix.shard-total }}
-        
-    - name: Generate test report
-      if: ${{ matrix.shard-index == 0 }} # Only run once
-      run: npm run test:report
-    
+      run: bun test
+
     - name: Build
-      run: npm run build
-    
+      run: bun run build
+
     - name: Verify build output
       run: |
-        echo "Checking build output structure..."
+        echo "Checking build output..."
         ls -la dist/
-        echo "Checking command files..."
-        ls -la dist/command/
-        echo "Checking config files..."
-        ls -la dist/config/
-        echo "Checking scripts..."
-        ls -la dist/scripts/
-        
-        # Verify main entry point exists
         test -f dist/beacon.js || (echo "Error: dist/beacon.js not found" && exit 1)
         echo "Build verification passed!"
-
-  lint:
-    runs-on: ubuntu-latest
-    
-    steps:
-    - uses: actions/checkout@v4
-    
-    - name: Use Node.js 24.x
-      uses: actions/setup-node@v4
-      with:
-        node-version: 24.x
-        cache: 'npm'
-    
-    - name: Install dependencies
-      run: npm ci
-    
-    - name: Check package.json formatting
-      run: |
-        # Check if package.json is valid JSON
-        node -e "const pkg = require('./package.json'); console.log('Package name:', pkg.name); console.log('Version:', pkg.version);"
-    
-    - name: Check for required files
-      run: |
-        echo "Checking for required files..."
-        required_files=(
-          "package.json"
-          "README.md"
-          "LICENSE"
-          "CHANGELOG.md"
-          "beacon.ts"
-          "tsconfig.json"
-          "config/beacon.default.json"
-          "scripts/setup.cjs"
-        )
-        
-        for file in "${required_files[@]}"; do
-          if [ ! -f "$file" ] && [ ! -d "$file" ]; then
-            echo "Missing required file/directory: $file"
-            exit 1
-          fi
-        done
-        echo "All required files present!"

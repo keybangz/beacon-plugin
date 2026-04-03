@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach } from 'bun:test';
 import { simpleHash } from '../src/lib/hash.js';
 
 describe('Hash Functions', () => {

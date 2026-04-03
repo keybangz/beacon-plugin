@@ -1,93 +1,89 @@
-import { vi } from 'vitest';
+import { mock } from 'bun:test';
 
-// Mock external dependencies
-vi.mock('fs', () => ({
-  existsSync: vi.fn(),
-  mkdirSync: vi.fn(),
-  readFileSync: vi.fn(),
-  writeFileSync: vi.fn(),
-  statSync: vi.fn(),
+// Mock external dependencies for tests
+mock.module('fs', () => ({
+  existsSync: mock(() => false),
+  mkdirSync: mock(() => undefined),
+  readFileSync: mock(() => '{}'),
+  writeFileSync: mock(() => undefined),
+  statSync: mock(() => ({ size: 0, mtimeMs: 0 })),
   promises: {
-    readFile: vi.fn(),
-    writeFile: vi.fn(),
-    stat: vi.fn(),
+    readFile: mock(() => Promise.resolve('')),
+    writeFile: mock(() => Promise.resolve()),
+    stat: mock(() => Promise.resolve({ size: 0, mtimeMs: 0 })),
   },
 }));
 
-vi.mock('path', () => ({
-  join: vi.fn((...args) => args.join('/')),
-  resolve: vi.fn((...args) => args.join('/')),
+mock.module('path', () => ({
+  join: mock((...args: string[]) => args.join('/')),
+  resolve: mock((...args: string[]) => args.join('/')),
+  dirname: mock((p: string) => p.split('/').slice(0, -1).join('/')),
+  basename: mock((p: string) => p.split('/').pop() ?? ''),
 }));
 
-vi.mock('os', () => ({
-  homedir: vi.fn(() => '/mock/home'),
+mock.module('os', () => ({
+  homedir: mock(() => '/mock/home'),
+  cpus: mock(() => [{ model: 'mock', speed: 0, times: { user: 0, nice: 0, sys: 0, idle: 0, irq: 0 } }]),
 }));
 
-vi.mock('onnxruntime-node', () => ({
-  InferenceSession: vi.fn().mockImplementation(() => ({
-    run: vi.fn(),
-    inputNames: vi.fn(),
-    outputNames: vi.fn(),
-    dispose: vi.fn(),
-  })),
-}));
-
-vi.mock('bun:sqlite', () => ({
-  Database: vi.fn().mockImplementation(() => ({
-    prepare: vi.fn(),
-    run: vi.fn(),
-    all: vi.fn(),
-    get: vi.fn(),
-    exec: vi.fn(),
-  })),
-}));
-
-vi.mock('hnswlib-node', async () => {
-  const actual = await vi.importActual('hnswlib-node');
-  return {
-    ...actual,
-    HierarchicalNSW: vi.fn().mockImplementation(() => ({
-      initIndex: vi.fn(),
-      addVector: vi.fn(),
-      addVectors: vi.fn(),
-      searchKnn: vi.fn(),
-      searchBatchKnn: vi.fn(),
-      saveIndex: vi.fn(),
-      loadIndex: vi.fn(),
-      getIndexType: vi.fn(),
-      getMaxElements: vi.fn(),
-      getCurrentCount: vi.fn(),
-      getM: vi.fn(),
-      getEfConstruction: vi.fn(),
-      getEf: vi.fn(),
-      setEf: vi.fn(),
-      getIndexFileName: vi.fn(),
+mock.module('onnxruntime-node', () => ({
+  InferenceSession: {
+    create: mock(() => Promise.resolve({
+      run: mock(() => Promise.resolve({})),
+      inputNames: [],
+      outputNames: [],
+      dispose: mock(() => Promise.resolve()),
     })),
-  };
-});
+  },
+  Tensor: mock((type: string, data: any, dims: number[]) => ({ type, data, dims })),
+}));
 
-vi.mock('picomatch', () => ({
-  default: vi.fn((pattern: string, options?: any) => {
+mock.module('hnswlib-node', () => ({
+  HierarchicalNSW: mock(() => ({
+    initIndex: mock(() => undefined),
+    addVector: mock(() => undefined),
+    addVectors: mock(() => undefined),
+    searchKnn: mock(() => ({ neighbors: [], distances: [] })),
+    searchBatchKnn: mock(() => []),
+    saveIndex: mock(() => undefined),
+    loadIndex: mock(() => undefined),
+    getIndexType: mock(() => 'l2'),
+    getMaxElements: mock(() => 0),
+    getCurrentCount: mock(() => 0),
+    getM: mock(() => 16),
+    getEfConstruction: mock(() => 200),
+    getEf: mock(() => 10),
+    setEf: mock(() => undefined),
+    getIndexFileName: mock(() => ''),
+  })),
+}));
+
+mock.module('picomatch', () => ({
+  default: mock((pattern: string) => {
     return (path: string) => {
-      // Simple mock implementations
       if (pattern === '**/*.ts') return path.endsWith('.ts');
       if (pattern === '**/*.js') return path.endsWith('.js');
       if (pattern === 'node_modules/**') return path.includes('node_modules');
       if (pattern === 'dist/**') return path.includes('dist');
-      return true; // Default: match everything
+      return true;
     };
   }),
 }));
 
-vi.mock('chokidar', () => ({
-  watch: vi.fn(() => ({
-    on: vi.fn(),
-    close: vi.fn(),
+mock.module('chokidar', () => ({
+  watch: mock(() => ({
+    on: mock(() => undefined),
+    close: mock(() => Promise.resolve()),
   })),
 }));
 
-vi.mock('zod', () => ({
-  zod: vi.fn(() => ({
-    parse: vi.fn(),
-  })),
+mock.module('zod', () => ({
+  z: {
+    object: mock(() => ({ parse: mock(() => ({})) })),
+    string: mock(() => ({ optional: mock(() => ({})) })),
+    number: mock(() => ({ optional: mock(() => ({})) })),
+    boolean: mock(() => ({ optional: mock(() => ({})) })),
+    array: mock(() => ({ optional: mock(() => ({})) })),
+    enum: mock(() => ({ optional: mock(() => ({})) })),
+  },
 }));

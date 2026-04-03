@@ -7,7 +7,12 @@
     "name": "keybangz"
   },
   "license": "MIT",
-  "main": "./dist/beacon.js",
+  "exports": {
+    ".": {
+      "types": "./dist/beacon.d.ts",
+      "default": "./dist/beacon.js"
+    }
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/keybangz/beacon-opencode"
@@ -34,14 +39,11 @@
   ],
   "scripts": {
     "clean": "rm -rf dist",
-    "build": "bun run clean && tsc && cp -r config command scripts dist/",
-    "dev": "bun run clean && tsc --watch",
-    "test": "vitest",
-    "test:shard": "node scripts/shard-runner.cjs",
-    "test:report": "node scripts/test-reporter.cjs",
+    "build": "bun build ./beacon.ts --outdir dist --target bun --sourcemap=inline",
+    "dev": "bun build ./beacon.ts --outdir dist --target bun --sourcemap=inline --watch",
+    "test": "bun test",
     "type-check": "tsc --noEmit",
-    "setup": "node scripts/setup.cjs",
-    "prepublishOnly": "bun run build",
+    "prepublishOnly": "bun run clean && bun run build",
     "postinstall": "node scripts/setup.cjs"
   },
   "dependencies": {
@@ -55,9 +57,8 @@
   "devDependencies": {
     "@types/node": "^20.10.0",
     "@types/picomatch": "^4.0.2",
-    "glob": "^11.0.0",
-    "typescript": "^5.3.0",
-    "vitest": "^3.0.0"
+    "bun-types": "latest",
+    "glob": "^11.0.0"
   },
   "peerDependencies": {
     "@opencode-ai/plugin": ">=1.0.0"
@@ -66,6 +67,9 @@
     "@opencode-ai/plugin": {
       "optional": false
     }
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "engines": {
     "node": ">=18.0.0",
