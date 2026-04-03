@@ -2,7 +2,7 @@
  * Configuration management
  * Loads default config, merges with per-repo overrides
  */
-import { readFileSync, existsSync } from "fs";
+import * as fs from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import { log } from "./logger.js";
@@ -27,10 +27,10 @@ import { getBeaconRoot } from "./repo-root.js";
 export function parseBlacklistAsGlobs(repoRoot: string): string[] {
     const safeRoot = repoRoot || getBeaconRoot();
     const blacklistPath = join(safeRoot, ".opencode", "blacklist.json");
-    if (!existsSync(blacklistPath))
+    if (!fs.existsSync(blacklistPath))
         return [];
     try {
-        const raw = readFileSync(blacklistPath, "utf8");
+        const raw = fs.readFileSync(blacklistPath, "utf8");
         const data = JSON.parse(raw);
         const entries = Array.isArray(data)
             ? data
@@ -77,10 +77,10 @@ export function parseBlacklistAsGlobs(repoRoot: string): string[] {
 export function parseBeaconIgnore(repoRoot: string): string[] {
     const safeRoot = repoRoot || getBeaconRoot();
     const ignorePath = join(safeRoot, ".beaconignore");
-    if (!existsSync(ignorePath))
+    if (!fs.existsSync(ignorePath))
         return [];
     try {
-        const lines = readFileSync(ignorePath, "utf8")
+        const lines = fs.readFileSync(ignorePath, "utf8")
             .split("\n")
             .map(line => line.trim())
             .filter(line => line && !line.startsWith("#"));
@@ -378,11 +378,11 @@ function loadDefaultConfig() {
 function loadRepoConfig(repoRoot: string) {
     const safeRoot = repoRoot || getBeaconRoot();
     const repoConfigPath = join(safeRoot, ".opencode", "beacon.json");
-    if (!existsSync(repoConfigPath)) {
+    if (!fs.existsSync(repoConfigPath)) {
         return {};
     }
     try {
-        const content = readFileSync(repoConfigPath, "utf-8");
+        const content = fs.readFileSync(repoConfigPath, "utf-8");
         return JSON.parse(content);
     }
     catch (error) {
@@ -409,11 +409,11 @@ export function getGlobalConfigPath(): string {
  */
 function loadGlobalConfig(): Partial<typeof DEFAULT_CONFIG> {
     const globalConfigPath = getGlobalConfigPath();
-    if (!existsSync(globalConfigPath)) {
+    if (!fs.existsSync(globalConfigPath)) {
         return {};
     }
     try {
-        const content = readFileSync(globalConfigPath, "utf-8");
+        const content = fs.readFileSync(globalConfigPath, "utf-8");
         return JSON.parse(content);
     }
     catch (error) {
