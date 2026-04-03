@@ -51,14 +51,15 @@
     "fast-glob": "^3.3.0",
     "hnswlib-node": "^3.0.0",
     "onnxruntime-node": "^1.24.3",
-    "picomatch": "^4.0.0",
+    "picomatch": "^4.0.4",
     "zod": "^3.22.0"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",
     "@types/picomatch": "^4.0.2",
     "bun-types": "latest",
-    "glob": "^11.0.0"
+    "glob": "^11.0.0",
+    "typescript": "^5.9.3"
   },
   "peerDependencies": {
     "@opencode-ai/plugin": ">=1.0.0"
