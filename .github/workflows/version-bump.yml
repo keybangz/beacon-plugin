@@ -19,39 +19,43 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-    
+
     steps:
     - uses: actions/checkout@v4
       with:
         fetch-depth: 0
         token: ${{ secrets.GITHUB_TOKEN }}
-    
-    - name: Use Node.js 24.x
+
+    - name: Setup Bun
+      uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: latest
+
+    - name: Setup Node.js (for npm version command)
       uses: actions/setup-node@v4
       with:
-        node-version: 24.x
-        cache: 'npm'
-    
+        node-version: 22.x
+
     - name: Configure Git
       run: |
         git config --global user.name 'GitHub Actions'
         git config --global user.email 'actions@github.com'
-    
+
     - name: Bump version
       id: bump
       run: |
         CURRENT_VERSION=$(node -p "require('./package.json').version")
         echo "Current version: $CURRENT_VERSION"
-        
+
         BUMP_TYPE="${{ github.event.inputs.version }}"
         echo "Bump type: $BUMP_TYPE"
-        
+
         if [[ "$BUMP_TYPE" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then
           NEW_VERSION="$BUMP_TYPE"
         else
           # Split version into parts
           IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
-          
+
           case "$BUMP_TYPE" in
             "major")
               NEW_VERSION="$((MAJOR + 1)).0.0"
@@ -68,26 +72,28 @@ jobs:
               ;;
           esac
         fi
-        
+
         echo "New version: $NEW_VERSION"
         echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
-        
+
         # Update package.json
         npm version $NEW_VERSION --no-git-tag-version
-        
+
         # Update CHANGELOG.md
         if [ -f CHANGELOG.md ]; then
           TODAY=$(date +'%Y-%m-%d')
           sed -i "1i ## $NEW_VERSION ($TODAY)\n\n- Bump version to $NEW_VERSION\n" CHANGELOG.md
         fi
-    
+
+    - name: Install dependencies
+      run: bun install
+
     - name: Run tests with new version
       run: |
-        npm ci
-        npm run type-check
-        npm test
-        npm run build
-    
+        bun run type-check
+        bun test
+        bun run build
+
     - name: Create Pull Request
       uses: peter-evans/create-pull-request@v5
       with:
@@ -96,19 +102,19 @@ jobs:
         title: "Release v${{ steps.bump.outputs.new_version }}"
         body: |
           ## Version Bump to v${{ steps.bump.outputs.new_version }}
-          
+
           Automated version bump via GitHub Actions workflow.
-          
+
           **Changes:**
           - Updated package.json version
           - Updated CHANGELOG.md
-          
+
           **Next steps:**
           1. Review and merge this PR
           2. Create a git tag: `git tag v${{ steps.bump.outputs.new_version }}`
           3. Push the tag: `git push origin v${{ steps.bump.outputs.new_version }}`
           4. The Release workflow will automatically publish to npm and GitHub Packages
-          
+
           **Files changed:**
           - package.json
           - CHANGELOG.md
