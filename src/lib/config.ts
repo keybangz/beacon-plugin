@@ -2,7 +2,15 @@
  * Configuration management
  * Loads default config, merges with per-repo overrides
  */
-import * as fs from "fs";
+import { existsSync as _existsSync, readFileSync as _readFileSync } from "fs";
+
+// Internal adapter — holds real fs references captured at module-init time,
+// before any mock.module('fs') can overwrite the registry.
+// Exported as @internal for test injection only.
+export const _fsAdapter = {
+    existsSync: _existsSync,
+    readFileSync: _readFileSync,
+};
 import { join } from "path";
 import { homedir } from "os";
 import { log } from "./logger.js";
@@ -27,10 +35,10 @@ import { getBeaconRoot } from "./repo-root.js";
 export function parseBlacklistAsGlobs(repoRoot: string): string[] {
     const safeRoot = repoRoot || getBeaconRoot();
     const blacklistPath = join(safeRoot, ".opencode", "blacklist.json");
-    if (!fs.existsSync(blacklistPath))
+    if (!_fsAdapter.existsSync(blacklistPath))
         return [];
     try {
-        const raw = fs.readFileSync(blacklistPath, "utf8");
+        const raw = _fsAdapter.readFileSync(blacklistPath, "utf8");
         const data = JSON.parse(raw);
         const entries = Array.isArray(data)
             ? data
@@ -77,10 +85,10 @@ export function parseBlacklistAsGlobs(repoRoot: string): string[] {
 export function parseBeaconIgnore(repoRoot: string): string[] {
     const safeRoot = repoRoot || getBeaconRoot();
     const ignorePath = join(safeRoot, ".beaconignore");
-    if (!fs.existsSync(ignorePath))
+    if (!_fsAdapter.existsSync(ignorePath))
         return [];
     try {
-        const lines = fs.readFileSync(ignorePath, "utf8")
+        const lines = _fsAdapter.readFileSync(ignorePath, "utf8")
             .split("\n")
             .map(line => line.trim())
             .filter(line => line && !line.startsWith("#"));
@@ -378,11 +386,11 @@ function loadDefaultConfig() {
 function loadRepoConfig(repoRoot: string) {
     const safeRoot = repoRoot || getBeaconRoot();
     const repoConfigPath = join(safeRoot, ".opencode", "beacon.json");
-    if (!fs.existsSync(repoConfigPath)) {
+    if (!_fsAdapter.existsSync(repoConfigPath)) {
         return {};
     }
     try {
-        const content = fs.readFileSync(repoConfigPath, "utf-8");
+        const content = _fsAdapter.readFileSync(repoConfigPath, "utf-8");
         return JSON.parse(content);
     }
     catch (error) {
@@ -409,11 +417,11 @@ export function getGlobalConfigPath(): string {
  */
 function loadGlobalConfig(): Partial<typeof DEFAULT_CONFIG> {
     const globalConfigPath = getGlobalConfigPath();
-    if (!fs.existsSync(globalConfigPath)) {
+    if (!_fsAdapter.existsSync(globalConfigPath)) {
         return {};
     }
     try {
-        const content = fs.readFileSync(globalConfigPath, "utf-8");
+        const content = _fsAdapter.readFileSync(globalConfigPath, "utf-8");
         return JSON.parse(content);
     }
     catch (error) {

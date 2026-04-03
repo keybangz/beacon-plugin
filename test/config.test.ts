@@ -1,22 +1,17 @@
-import { describe, it, expect, beforeEach, mock } from 'bun:test';
-import { existsSync, readFileSync, mkdirSync, writeFileSync, readdirSync, statSync, unlinkSync, rmdirSync } from 'fs';
+import { describe, it, expect, beforeEach, beforeAll } from 'bun:test';
+import { loadConfig, validateConfig, invalidateConfigCache, _fsAdapter } from '../src/lib/config.js';
 
-// Re-register the real fs module to override the mock from embedder.test.ts
-// (which stubs existsSync to always return true, causing ENOENT in loadRepoConfig).
-// We capture the real fs functions via static import (hoisted before any mock.module)
-// and then re-assert them as the active module.
-mock.module('fs', () => ({
-  existsSync,
-  readFileSync,
-  mkdirSync,
-  writeFileSync,
-  readdirSync,
-  statSync,
-  unlinkSync,
-  rmdirSync,
-}));
+// Capture real fs functions via require() — CJS cache is separate from the ESM
+// mock.module() registry, so this bypasses embedder.test.ts's mock.module('fs') stub.
+let _realExistsSync: (...args: any[]) => any;
+let _realReadFileSync: (...args: any[]) => any;
 
-const { loadConfig, validateConfig, invalidateConfigCache } = await import('../src/lib/config.js');
+beforeAll(() => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const realFs = require('fs');
+  _realExistsSync = realFs.existsSync;
+  _realReadFileSync = realFs.readFileSync;
+});
 
 // A path guaranteed to not be inside any git repo on any CI runner.
 // /tmp is outside the checkout directory and has no .git ancestor.
@@ -25,6 +20,9 @@ const TEST_REPO_ROOT = '/tmp/beacon-test-no-repo';
 describe('Configuration Management', () => {
   describe('loadConfig', () => {
     beforeEach(() => {
+      // Restore real fs functions on the adapter before each test
+      _fsAdapter.existsSync = _realExistsSync;
+      _fsAdapter.readFileSync = _realReadFileSync;
       // Clear any cached config for the test path to prevent cross-test pollution
       invalidateConfigCache(TEST_REPO_ROOT);
     });
