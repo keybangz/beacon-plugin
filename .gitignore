@@ -1,6 +1,7 @@
 # Dependencies
 node_modules/
 .opencode/
+.playwright-mcp/
 
 # Build output
 dist/
