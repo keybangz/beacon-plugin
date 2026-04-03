@@ -1,257 +1,190 @@
-# Beacon OpenCode Plugin
+# beacon-opencode
 
-**Semantic grep replacement for OpenCode** — Search code by meaning, not just string matching. Beacon replaces the built-in grep tool with hybrid semantic search (embeddings + BM25 + identifier boosting).
+Semantic code search plugin for OpenCode using **hybrid retrieval** (vector embeddings + BM25 + identifier boosting + reciprocal rank fusion).
 
-## Features
+- **npm package**: `beacon-opencode`
+- **Repository**: `beacon-plugin`
+- **Current version**: `2.1.0`
+- **Development runtime**: **Bun**
+- **Plugin entry point**: `beacon.ts` (build output: `dist/beacon.js`)
 
-- **Grep Replacement** — Seamlessly replaces OpenCode's grep with semantic search
-- **Hybrid Search** — Combines vector embeddings, BM25 keyword matching, and identifier boosting
-- **HNSW Index** — O(log n) approximate nearest neighbor search for fast vector queries
-- **Local ONNX Embeddings** — Zero-latency embeddings using onnxruntime-node (no HTTP calls)
-- **Query Expansion** — Semantic expansion with code synonyms (e.g., "auth" → "authentication", "login")
-- **Semantic Chunking** — AST-aware chunking at function/class boundaries
-- **BERT Tokenizer** — Proper WordPiece tokenization for BERT-based models
-- **Code-Specific Models** — Support for CodeBERT and UniXcoder models
-- **Reranking** — Cross-encoder and heuristic reranking for improved results
-- **Real-time Sync** — File watcher auto-indexes changes as you code
-- **Auto-Sync Hooks** — Auto-reindex changed files, garbage collect deleted ones
-- **Graceful Degradation** — Falls back to keyword-only search if embedding server is down
-- **Persistent Cache** — Search results cached in SQLite for instant repeat queries
-- **Performance Metrics** — Track search speed and cache hit rates
-- **Pluggable Embeddings** — ONNX (local), Ollama (local/free), OpenAI, Voyage AI, LiteLLM, or any OpenAI-compatible API
-- **Strict TypeScript** — Fully typed with `strict: true` for reliability
-- **Safe Chunking** — 80% safety margin with character-level truncation
+---
 
-## Quick Start
+## Installation (for end-users)
 
-### Option A: Install from Source
+```bash
+# From npm
+npm install beacon-opencode
+# Then add "beacon-opencode" to plugins array in opencode.json
+```
+
+---
+
+## Build from source
 
 ```bash
 git clone https://github.com/keybangz/beacon-opencode
 cd beacon-opencode
-npm install
-npm run build
+bun install
+bun run build
 npm pack
+# Then install the .tgz into your OpenCode config
 ```
+
+---
+
+## Development commands
 
 ```bash
-cd ~/.config/opencode
-npm install ./path-to-packed-plugin.tgz
+bun run build       # builds dist/beacon.js only (inline sourcemap, no .map file)
+bun test            # run test suite
+bun run type-check  # TypeScript type checking
 ```
 
-Add `beacon-opencode` to your `plugin` array in `opencode.json`.
+> Note: Development in this repo uses **Bun** (`bun install`, `bun run ...`), not npm scripts for local dev workflows.
 
-### Configure Embeddings
+---
 
-**Option 1: Local ONNX (Zero HTTP latency)** - This is the default, no configuration file needed.
+## Tools exposed by Beacon
+
+1. `search` — Hybrid semantic search (vector + BM25 + identifier boosting + RRF)
+2. `index` — Visual dashboard with coverage stats
+3. `reindex` — Force full rebuild from scratch
+4. `status` — Quick health check
+5. `config` — View/set configuration values
+6. `blacklist` — Manage excluded paths
+7. `whitelist` — Allow paths within blacklisted dirs
+8. `performance` — Track search speed and cache hit rates
+9. `terminate-indexer` — Stop a running index operation
+10. `download-model` — Download ONNX embedding models
+
+Supported model options via `download-model`:
+- `all-MiniLM-L6-v2` (default)
+- `all-MiniLM-L12-v2`
+- `paraphrase-MiniLM-L6-v2`
+- `codebert-base`
+- `unixcoder-base`
+- `jina-embeddings-v2-base-code`
+- `nomic-embed-text-v1.5`
+
+---
+
+## Event hooks
+
+Beacon registers the following plugin lifecycle hooks:
+
+- `session.created` — Initialize watcher, ensure user config, set up resource pool
+- `tool.execute.before` — Pre-execution checks
+- `tool.execute.after` — Auto-reindex on `write_file` / `edit_file` / `str_replace_editor`; garbage collect on `rm` / `rmdir` / `git rm` / `git mv`
+- `experimental.session.compacting` — Inject index status before compaction
+
+---
+
+## Default configuration
+
 ```json
-// .opencode/beacon.json
 {
-  "embedding": {
-    "api_base": "local"
-  }
+  "embedding": { "api_base": "local", "model": "all-MiniLM-L6-v2", "dimensions": 384, "batch_size": 32, "context_limit": 256 },
+  "chunking": { "strategy": "hybrid", "max_tokens": 512, "overlap_tokens": 32 },
+  "indexing": { "max_file_size_kb": 500, "auto_index": true, "max_files": 10000, "concurrency": 4 },
+  "search": { "top_k": 10, "similarity_threshold": 0.35 },
+  "storage": { "path": ".opencode/.beacon" }
 }
 ```
 
-**Option 2: Ollama (Local/Free)**
-```bash
-brew install ollama
-ollama serve &
-ollama pull all-minilm:22m
-```
+Default indexed file types:
 
-**Option 3: OpenAI/Voyage/etc.**
-```json
-{
-  "embedding": {
-    "api_base": "https://api.openai.com/v1",
-    "api_key": "your-key",
-    "model": "text-embedding-3-small"
-  }
-}
-```
+- `.ts`, `.tsx`, `.js`, `.jsx`, `.py`, `.go`, `.rs`, `.java`, `.rb`, `.php`, `.sql`, `.md`
 
-### Search Your Code
+---
 
-# Initialize index
-```
-reindex
-```
+## Embedding models (`download-model`)
 
-# Search semantically (replaces grep)
-```
-search "authentication flow"
-search "database connection logic"
-search "error handling in API"
-```
+| Model | Dims | Size | Best for |
+|-------|------|------|----------|
+| all-MiniLM-L6-v2 (default) | 384 | ~90MB | Fast general-purpose baseline |
+| all-MiniLM-L12-v2 | 384 | ~134MB | Deeper MiniLM, better quality |
+| paraphrase-MiniLM-L6-v2 | 384 | ~90MB | Similar code pattern detection |
+| jina-embeddings-v2-base-code | 768 | ~162MB | Best code-specific (int8 quantized, 30 PLs) |
+| nomic-embed-text-v1.5 | 768 | ~137MB | High quality, 8192-token context, set query_prefix |
+| codebert-base | 768 | ~480MB | NL→code retrieval |
+| unixcoder-base | 768 | ~470MB | Code clone detection |
 
+---
 
-## Tools
+## Project structure
 
-### Search
-
-```
-search "authentication flow"
-```
-
-Hybrid search combining semantic similarity, BM25 keyword matching, and identifier boosting.
-
-**Options:**
-- `topK` — Number of results (default: 10)
-- `threshold` — Minimum score cutoff (default: 0.01)
-- `pathPrefix` — Scope results to a directory
-- `noHybrid` — Use pure vector search only
-
-### Indexing
-
-```
-status          # Quick health check
-index           # Visual dashboard with coverage
-reindex         # Force full rebuild from scratch
-terminate-indexer  # Stop a running index operation
-```
-
-### Configuration
-
-```
-config view                          # View current config
-config set embedding.model llama2    # Change embedding model
-blacklist list                       # Show blacklisted dirs
- blacklist add ./secrets              # Exclude from indexing
- whitelist add ./vendor/important     # Allow in blacklisted dir
-```
-
-## Architecture
-
-### Project Structure
-
-```
+```text
 beacon-plugin/
-├── .opencode/
-│   ├── tools/                # OpenCode tools
-│   │   ├── search.ts
-│   │   ├── index.ts
-│   │   ├── status.ts
-│   │   ├── reindex.ts
-│   │   ├── config.ts
-│   │   ├── blacklist.ts
-│   │   ├── whitelist.ts
-│   │   ├── performance.ts
-│   │   └── terminate-indexer.ts
-│   └── plugins/
-│       └── beacon.ts         # Plugin entry point with event hooks
+├── beacon.ts                    # Plugin entry point
 ├── src/
-│   └── lib/                  # TypeScript source
-│       ├── types.ts
-│       ├── db.ts
+│   ├── lib/
+│   │   ├── types.ts             # Type definitions
+│   │   ├── config.ts            # Config loading, merging, validation
+│   │   ├── repo-root.ts         # Git repo root detection
+│   │   ├── db.ts                # SQLite + FTS5 database layer
+│   │   ├── embedder.ts          # Embedding coordination
+│   │   ├── embedder-worker.ts   # Worker thread for embeddings
+│   │   ├── onnx-embedder.ts     # Local ONNX runtime embedder
+│   │   ├── bert-tokenizer.ts    # BERT WordPiece tokenizer
+│   │   ├── chunker.ts           # Token-based + AST-aware chunking
+│   │   ├── code-tokenizer.ts    # Code-specific tokenization
+│   │   ├── tokenizer.ts         # BM25 / identifier tokenizer
+│   │   ├── hnsw.ts              # HNSW vector index (hnswlib-node)
+│   │   ├── sync.ts              # IndexCoordinator (incremental sync)
+│   │   ├── pool.ts              # Resource pool (DB + embedder + coordinator)
+│   │   ├── cache.ts             # SQLite-backed search result cache
+│   │   ├── reranker.ts          # Cross-encoder + heuristic reranker
+│   │   ├── git.ts               # git ls-files file discovery
+│   │   ├── fs-glob.ts           # Fallback glob-based file discovery
+│   │   ├── ignore.ts            # .beaconignore pattern parsing
+│   │   ├── safety.ts            # Blacklist validation
+│   │   ├── watcher.ts           # chokidar file watcher
+│   │   ├── hash.ts              # DJB2a hash
+│   │   ├── benchmark.ts         # Performance benchmarking
+│   │   └── logger.ts            # Structured logger
+│   └── tools/
+│       ├── search.ts
+│       ├── index.ts
+│       ├── reindex.ts
+│       ├── status.ts
 │       ├── config.ts
-│       ├── repo-root.ts
-│       ├── chunker.ts
-│       ├── embedder.ts
-│       ├── hnsw.ts
-│       ├── cache.ts
-│       ├── reranker.ts
-│       ├── tokenizer.ts
-│       ├── git.ts
-│       ├── ignore.ts
-│       ├── safety.ts
-│       └── watcher.ts
-├── dist/                     # Bundled plugin (output of npm run build)
-│   └── index.js
-├── package.json
-└── README.md
+│       ├── blacklist.ts
+│       ├── whitelist.ts
+│       ├── performance.ts
+│       ├── terminate-indexer.ts
+│       └── download-model.ts
+├── config/
+│   └── beacon.default.json      # Shipped default config
+├── scripts/
+│   └── setup.cjs                # postinstall setup script
+├── dist/
+│   └── beacon.js                # Bundled output (bun run build)
+└── package.json
 ```
 
-### Event Hooks
-
-- **`tool.execute.after`** — Auto-reindex changed files (write_file, edit_file, str_replace_editor); garbage collect deleted files (rm, rmdir, git rm, git mv)
-- **`experimental.session.compacting`** — Inject index status before compaction
-- **`shell.env`** — Inject environment variables
-
-### Technology Stack
-
-- **Database** — SQLite with WAL mode
-- **Vector Search** — HNSW (hnswlib-node) for O(log n) approximate nearest neighbor
-- **Full-Text Search** — FTS5 with porter stemmer
-- **Ranking** — RRF combining vector + BM25 + identifier matching
-- **Embeddings** — ONNX local (default), OpenAI-compatible API (Ollama, OpenAI, Voyage AI, etc.)
-- **File Scanning** — Git-based (git ls-files)
-- **Pattern Matching** — picomatch for glob patterns
-
-## Implementation Status
-
-- ✅ Type definitions and interfaces
-- ✅ Configuration management (loading, merging, validation)
-- ✅ File discovery (git integration)
-- ✅ Pattern matching (glob support)
-- ✅ Code chunking (token-based with overlap, 80% safety margin, character-level truncation)
-- ✅ Semantic chunking (AST-aware at function/class boundaries)
-- ✅ Tokenization (BM25, identifier extraction, RRF)
-- ✅ Query expansion (code synonyms, camelCase splitting)
-- ✅ Embedding coordination (with retry logic)
-- ✅ ONNX local embeddings (zero HTTP latency)
-- ✅ BERT WordPiece tokenizer
-- ✅ CodeBERT/UniXcoder support
-- ✅ Reranking (cross-encoder + heuristic)
-- ✅ Safety checks (blacklist validation, terminate-indexer with DB flag)
-- ✅ Database layer (SQLite + FTS5)
-- ✅ HNSW vector index
-- ✅ Persistent search cache
-- ✅ Performance metrics tracking
-- ✅ Tool implementations (search, index, status, reindex, config, blacklist, whitelist, performance, terminate-indexer)
-- ✅ Auto-sync hooks (incremental re-embedding, garbage collection)
-- ✅ File watcher for real-time indexing
-- ✅ Progress reporting with DB state tracking
+---
 
 ## Troubleshooting
 
-### Embedding server unreachable
+- If you are building from source, use:
+  - ✅ `bun run build && reindex`
+  - ❌ `npm run build && reindex`
+- In development context, use:
+  - ✅ `bun install`
+  - ❌ `npm install`
+- TypeScript configuration currently uses `strict: false` (this is expected for this version).
 
-Start Ollama:
-
-```bash
-ollama serve &
-ollama pull all-minilm:22m
-```
-
-### "Input length exceeds context length" errors
-
-This usually means `context_limit` in config exceeds the model's actual context window:
-
-1. Check model context: `ollama show <model_name> | grep context_length`
-2. Set `context_limit` in `.opencode/beacon.json` to match (e.g., 256 for all-minilm:22m)
-3. Rebuild and reindex: `npm run build && reindex`
-
-Beacon automatically applies an 80% safety margin, so set `context_limit` to the model's max, not the desired chunk size.
-
-### Index corrupted
-
-Force rebuild:
-
-```
-reindex
-```
-
-### Change embedding model
-
-1. Install new model: `ollama pull mxbai-embed-large`
-2. Update config: `.opencode/beacon.json` with correct dimensions
-3. Rebuild: `npm run build && reindex`
-
-## License
-
-MIT — See LICENSE file
+---
 
 ## Contributing
 
-Contributions welcome! Please ensure:
+- Use Bun for local workflows (`bun install`, `bun run build`, `bun test`, `bun run type-check`).
+- TypeScript must compile without type errors (`bun run type-check` passes).
+- Keep docs aligned with the current runtime/build pipeline (Bun-based development, npm distribution for users).
 
-1. All TypeScript compiles with strict mode
-2. No `any` types
-3. Tests pass
-4. Code follows the functional programming guidelines
+---
 
-## Related
+## License
 
-- [OpenCode Docs](https://opencode.ai/docs) — OpenCode documentation
-- [Ollama](https://ollama.com) — Local LLMs and embeddings
+MIT

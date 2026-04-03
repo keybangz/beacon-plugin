@@ -1,6 +1,7 @@
-import { mkdirSync, existsSync, writeFileSync, statSync, unlinkSync } from "fs";
+import { mkdirSync, existsSync, writeFileSync, statSync, unlinkSync, createReadStream } from "fs";
 import { join, dirname } from "path";
 import { homedir } from "os";
+import { createHash } from "crypto";
 import { tool, type ToolDefinition } from "@opencode-ai/plugin";
 
 const MODELS: Record<string, {
@@ -76,7 +77,30 @@ const MODELS: Record<string, {
   },
 };
 
+// SHA-256 checksums for downloaded artifacts.
+// These are verified post-download. A null entry means unverified (hash not yet published).
+// Hashes will be updated in each release. Verify against: https://github.com/keybangz/beacon-opencode/releases
+const KNOWN_HASHES: Record<string, { model: string | null; vocab: string | null }> = {
+  "all-MiniLM-L6-v2":              { model: null, vocab: null },
+  "all-MiniLM-L12-v2":             { model: null, vocab: null },
+  "paraphrase-MiniLM-L6-v2":       { model: null, vocab: null },
+  "codebert-base":                  { model: null, vocab: null },
+  "unixcoder-base":                 { model: null, vocab: null },
+  "jina-embeddings-v2-base-code":   { model: null, vocab: null },
+  "nomic-embed-text-v1.5":          { model: null, vocab: null },
+};
+
 const DOWNLOAD_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+
+function computeSHA256(filePath: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const hash = createHash("sha256");
+    const stream = createReadStream(filePath);
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.on("end", () => resolve(hash.digest("hex")));
+    stream.on("error", reject);
+  });
+}
 
 async function downloadFile(url: string, destPath: string): Promise<void> {
   const controller = new AbortController();
@@ -131,6 +155,8 @@ const _export: ToolDefinition = tool({
       await downloadFile(modelInfo.url, modelPath);
 
       let modelSize: number;
+      let modelHash: string;
+      let vocabHash: string | null = null;
       try {
         modelSize = statSync(modelPath).size / 1024 / 1024;
       } catch {
@@ -139,9 +165,38 @@ const _export: ToolDefinition = tool({
         throw new Error("Downloaded model file could not be read; the file may be corrupt.");
       }
 
+      // Compute and verify SHA-256 of downloaded model
+      modelHash = await computeSHA256(modelPath);
+      const knownHash = KNOWN_HASHES[model];
+      if (knownHash?.model !== null && knownHash?.model !== undefined) {
+        if (modelHash !== knownHash.model) {
+          unlinkSync(modelPath);
+          throw new Error(
+            `SHA-256 mismatch for model file!\n` +
+            `  Expected: ${knownHash.model}\n` +
+            `  Got:      ${modelHash}\n` +
+            `Download aborted. This may indicate a compromised file. Do not use this model.`
+          );
+        }
+      }
+
       if (modelInfo.vocabUrl) {
         try {
           await downloadFile(modelInfo.vocabUrl, vocabPath);
+
+          vocabHash = await computeSHA256(vocabPath);
+          if (knownHash?.vocab !== null && knownHash?.vocab !== undefined) {
+            if (vocabHash !== knownHash.vocab) {
+              try { unlinkSync(modelPath); } catch {}
+              try { unlinkSync(vocabPath); } catch {}
+              throw new Error(
+                `SHA-256 mismatch for vocab file!\n` +
+                `  Expected: ${knownHash.vocab}\n` +
+                `  Got:      ${vocabHash}\n` +
+                `Download aborted. This may indicate a compromised file.`
+              );
+            }
+          }
         } catch (vocabError) {
           // Vocab download failed — remove the model file to avoid a corrupt partial state
           try { unlinkSync(modelPath); } catch {}
@@ -178,6 +233,10 @@ const _export: ToolDefinition = tool({
         `Size: ${modelSize.toFixed(2)} MB`,
         `Type: ${modelInfo.type}`,
         `Description: ${modelInfo.description}`,
+        `Integrity:`,
+        `  model.onnx SHA-256: ${modelHash}`,
+        modelInfo.vocabUrl ? `  vocab.txt  SHA-256: ${vocabHash}` : null,
+        `  Tip: Verify these hashes against the checksums published at https://github.com/keybangz/beacon-opencode/releases`,
         ``,
         `To apply globally (all projects), add to ${globalConfigPath}:`,
         configOutput,
