@@ -26,6 +26,8 @@ import {
   unlinkSync,
   readFileSync,
   writeFileSync,
+  renameSync,
+  copyFileSync,
 } from "fs";
 import { join, dirname } from "path";
 import type { SearchResult } from "./types.js";
@@ -216,15 +218,12 @@ export class HNSWVectorIndex {
       } catch {
         // Ignore if original doesn't exist
       }
-      // Note: renameSync doesn't exist in all Node versions, use try-catch
       try {
-        const fs = require("fs");
-        fs.renameSync(tmpPath, this.indexPath);
+        renameSync(tmpPath, this.indexPath);
       } catch {
         // Fallback: copy and delete
-        const fs = require("fs");
-        fs.copyFileSync(tmpPath, this.indexPath);
-        fs.unlinkSync(tmpPath);
+        copyFileSync(tmpPath, this.indexPath);
+        unlinkSync(tmpPath);
       }
       
       this.isDirty = false;

@@ -1,6 +1,7 @@
 import type { Plugin } from "@opencode-ai/plugin";
 import * as fs from "fs";
 import * as path from "path";
+import { fileURLToPath } from "url";
 import { initLogger } from "./src/lib/logger.js";
 import SearchTool from "./src/tools/search.js";
 import IndexTool from "./src/tools/index.js";
@@ -18,6 +19,10 @@ import { getOrCreateWatcher } from "./src/lib/watcher.js";
 import type { FileWatcher } from "./src/lib/watcher.js";
 import { getCoordinator, releaseCoordinator } from "./src/lib/pool.js";
 import type { IndexProgress } from "./src/lib/sync.js";
+
+// ESM-compatible __dirname substitute (works on Node 18+ and all Bun versions)
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const isNode = typeof process !== "undefined" && process.versions?.node;
 

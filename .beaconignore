@@ -1,0 +1,67 @@
+# Beacon ignore file
+# Add glob patterns here to exclude files from indexing
+# One pattern per line. Lines starting with # are comments.
+#
+# Examples:
+# secret-dir/
+# *.secret
+# private/**
+
+# Version control
+.git/**
+.svn/**
+.hg/**
+.bzr/**
+
+# Package manager dependencies
+node_modules/**
+vendor/**
+bower_components/**
+__pypackages__/**
+.pnp/**
+.yarn/cache/**
+
+# Python environments & caches
+venv/**
+.venv/**
+env/**
+__pycache__/**
+.pytest_cache/**
+.mypy_cache/**
+.ruff_cache/**
+.tox/**
+*.egg-info/**
+site-packages/**
+
+# Build output
+dist/**
+build/**
+out/**
+output/**
+target/**
+bin/**
+obj/**
+.next/**
+.nuxt/**
+.svelte-kit/**
+_site/**
+public/build/**
+.turbo/**
+.vercel/**
+.netlify/**
+
+# Lock files
+*.lock
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+Pipfile.lock
+poetry.lock
+Cargo.lock
+go.sum
+Gemfile.lock
+composer.lock
+
+# Logs
+logs/**
+*.log

@@ -34,15 +34,15 @@
   ],
   "scripts": {
     "clean": "rm -rf dist",
-    "build": "npm run clean && tsc && cp -r config command scripts dist/",
-    "dev": "npm run clean && tsc --watch",
+    "build": "bun run clean && tsc && cp -r config command scripts dist/",
+    "dev": "bun run clean && tsc --watch",
     "test": "vitest",
     "test:shard": "node scripts/shard-runner.cjs",
     "test:report": "node scripts/test-reporter.cjs",
     "type-check": "tsc --noEmit",
     "setup": "node scripts/setup.cjs",
-    "prepublishOnly": "npm run build",
-    "postinstall": "npm run setup"
+    "prepublishOnly": "bun run build",
+    "postinstall": "node scripts/setup.cjs"
   },
   "dependencies": {
     "chokidar": "^5.0.0",
@@ -68,6 +68,7 @@
     }
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=18.0.0",
+    "bun": ">=1.0.23"
   }
 }
