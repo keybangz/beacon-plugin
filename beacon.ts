@@ -1,5 +1,6 @@
 import type { Plugin } from "@opencode-ai/plugin";
 import * as fs from "fs";
+import * as os from "os";
 import * as path from "path";
 import { fileURLToPath } from "url";
 import { initLogger } from "./src/lib/logger.js";
@@ -63,8 +64,8 @@ function ensureUserConfig(worktree: string): {
     defaultConfig = {
       embedding: {
         api_base: "local",
-        model: "all-MiniLM-L6-v2",
-        dimensions: 384,
+        model: "jina-embeddings-v2-base-code",
+        dimensions: 768,
         batch_size: 32,
         context_limit: 256,
         query_prefix: "",
@@ -543,7 +544,75 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
       }
 
       // Ensure config exists before trying to load it
-      ensureUserConfig(worktree);
+      const userConfigResult = ensureUserConfig(worktree);
+
+      // Auto-create global opencode config
+      try {
+        const globalConfigDir = path.join(os.homedir(), ".config", "opencode");
+        const globalConfigPath = path.join(globalConfigDir, "beacon.json");
+        if (!fs.existsSync(globalConfigPath)) {
+          if (!fs.existsSync(globalConfigDir)) {
+            fs.mkdirSync(globalConfigDir, { recursive: true });
+          }
+
+          let defaultConfig: any = null;
+          try {
+            const defaultConfigPath = path.join(
+              __dirname,
+              "..",
+              "config",
+              "beacon.default.json",
+            );
+            if (fs.existsSync(defaultConfigPath)) {
+              defaultConfig = JSON.parse(
+                fs.readFileSync(defaultConfigPath, "utf8"),
+              );
+            }
+          } catch {
+            // Silent fail
+          }
+
+          if (!defaultConfig && userConfigResult?.config) {
+            defaultConfig = userConfigResult.config;
+          }
+
+          if (defaultConfig) {
+            fs.writeFileSync(
+              globalConfigPath,
+              JSON.stringify(defaultConfig, null, 2),
+              "utf8",
+            );
+          }
+        }
+      } catch {
+        // Silent fail
+      }
+
+      // Auto-copy command docs to global opencode command dir
+      try {
+        const srcCommandDir = path.join(__dirname, "..", "command");
+        const dstCommandDir = path.join(
+          os.homedir(),
+          ".config",
+          "opencode",
+          "command",
+        );
+        if (fs.existsSync(srcCommandDir)) {
+          if (!fs.existsSync(dstCommandDir)) {
+            fs.mkdirSync(dstCommandDir, { recursive: true });
+          }
+          for (const file of fs.readdirSync(srcCommandDir)) {
+            if (file.endsWith(".md")) {
+              fs.copyFileSync(
+                path.join(srcCommandDir, file),
+                path.join(dstCommandDir, file),
+              );
+            }
+          }
+        }
+      } catch {
+        // Silent fail
+      }
 
       const detectedRoot = getBeaconRoot(worktree);
       if (!detectedRoot) {

@@ -1,4 +1,22 @@
----
-description: Semantic code search
----
-Use the search tool with a query to perform semantic code search across the codebase.
+Use the `search` tool to perform hybrid semantic + keyword code search across the indexed codebase.
+
+## Parameters
+- `query` (required): Natural language or keyword search query
+- `topK` (optional): Number of results to return (default: 10, max: 50)
+- `threshold` (optional): Minimum similarity score 0.0–1.0 (default: 0.35)
+- `pathPrefix` (optional): Restrict results to files under this path prefix (e.g. `src/lib`)
+- `noHybrid` (optional): Set `true` to disable BM25 keyword component and use pure vector search
+
+## Examples
+- Basic semantic search: `query="authentication middleware"`
+- Scoped to directory: `query="error handling", pathPrefix="src/lib"`
+- High-precision search: `query="database connection pool", threshold=0.6`
+- Keyword-only boost: `query="TODO fixme", noHybrid=false`
+
+## Output
+Returns ranked results with file path, line number, score, and matching code snippet. Results are sorted by hybrid RRF score combining semantic similarity and BM25 keyword match.
+
+## Notes
+- Requires the index to be built first (use `/reindex` if no results appear)
+- Automatically triggered on grep-like shell commands as a replacement
+- Use `/grepsearch` as an alias for the same functionality
