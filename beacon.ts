@@ -467,7 +467,6 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
                     {
                       type: "text",
                       text: formatProgressMessage(progress),
-                      synthetic: true,
                     },
                   ],
                 },
@@ -484,7 +483,6 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
               {
                 type: "text",
                 text: "✅ **Beacon Indexing Complete**\nYour codebase is now indexed and ready for semantic search.",
-                synthetic: true,
               },
             ],
           },
@@ -643,17 +641,6 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
       fileWatcher.start();
       isInitialized = true;
 
-      // Perform auto-indexing on initialization if configured
-      // FIX: set hasAttemptedAutoIndex to true AFTER performAutoIndex resolves, not before
-      if (config.indexing.auto_index && !hasAttemptedAutoIndex) {
-        // Run silently in background
-        performAutoIndex().then(() => {
-          hasAttemptedAutoIndex = true;
-        }).catch(() => {
-          hasAttemptedAutoIndex = true;
-        });
-      }
-
       return true;
     } catch (error) {
       return false;
@@ -664,15 +651,43 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
 
   await initializePlugin();
 
+  // Log plugin initialization to structured log (visible in opencode logs)
+  try {
+    await client.app.log({
+      body: {
+        service: "beacon",
+        level: "info",
+        message: isInitialized
+          ? "Beacon plugin loaded — auto-index will run on first session.created"
+          : "Beacon plugin loaded — no git repository detected, indexing disabled",
+        extra: { worktree },
+      },
+    });
+  } catch {
+    // Non-fatal
+  }
+
   return {
     event: async ({ event }) => {
       if (event.type === "session.created") {
         const sessionID =
-          (event as any).sessionID ??
-          (event as any).properties?.sessionID ??
           (event as any).properties?.info?.id ??
+          (event as any).properties?.sessionID ??
+          (event as any).sessionID ??
           (event as any).id;
-        if (!sessionID) return;
+
+        if (!sessionID) {
+          await client.app.log({
+            body: {
+              service: "beacon",
+              level: "warn",
+              message:
+                "session.created fired but sessionID could not be extracted — skipping auto-index notification",
+              extra: { eventKeys: Object.keys(event) },
+            },
+          });
+          return;
+        }
 
         if (!isInitialized) {
           const initialized = await initializePlugin();
@@ -680,12 +695,21 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
         }
 
         if (!hasAttemptedAutoIndex) {
+          hasAttemptedAutoIndex = true;  // Set BEFORE async call to prevent re-entry
           try {
             await performAutoIndex(sessionID);
           } catch (error) {
-            // Silent fail
+            await client.app.log({
+              body: {
+                service: "beacon",
+                level: "warn",
+                message: "Auto-index failed on session.created",
+                extra: {
+                  error: error instanceof Error ? error.message : String(error),
+                },
+              },
+            });
           }
-          hasAttemptedAutoIndex = true;
         } else {
           // Check if indexing is needed and show status
           let pooled;

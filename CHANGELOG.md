@@ -2,6 +2,18 @@
 
 All notable changes to Beacon will be documented in this file.
 
+## [2.3.2] - 2026-04-04
+
+### Fixed
+- **Auto-index race condition** (`beacon.ts`): `initializePlugin()` was calling `performAutoIndex()` in the background before any session existed — the silent-indexing branch ran, set `hasAttemptedAutoIndex = true`, and by the time `session.created` fired the flag was already set so no user-facing progress messages were shown. Removed auto-index from `initializePlugin()`; indexing now triggers exclusively from `session.created` where a valid session ID is available.
+- **Session ID extraction order** (`beacon.ts`): Primary extraction path was wrong — now correctly uses `properties?.info?.id` first (per OpenCode SDK), with `properties?.sessionID`, `sessionID`, and `id` as fallbacks.
+- **Silent bail on missing session ID** (`beacon.ts`): When session ID could not be extracted, the handler silently returned with no diagnostic. Now logs a structured `warn` via `client.app.log()` before returning.
+- **`hasAttemptedAutoIndex` flag timing** (`beacon.ts`): Flag was set to `true` after `await performAutoIndex()` resolved — a second `session.created` event (e.g. user opens new session mid-index) could trigger a duplicate index run. Flag is now set before the async call.
+- **Non-standard `synthetic: true` on message parts** (`beacon.ts`): `synthetic: true` is not in the `@opencode-ai/plugin` SDK schema and was silently dropped or caused failures. Removed from all `client.session.prompt()` parts.
+
+### Improved
+- **Plugin load visibility** (`beacon.ts`): Added structured `info` log via `client.app.log()` after plugin initialisation completes, showing whether auto-index is armed or disabled (no git repo detected). Visible in OpenCode structured logs.
+
 ## [2.3.1] - 2026-04-04
 
 ### Fixed

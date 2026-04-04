@@ -4,7 +4,7 @@ Semantic code search plugin for OpenCode using **hybrid retrieval** (vector embe
 
 - **npm package**: `beacon-opencode`
 - **Repository**: `beacon-plugin`
-- **Current version**: `2.3.1`
+- **Current version**: `2.3.2`
 - **Development runtime**: **Bun**
 - **Plugin entry point**: `beacon.ts` (build output: `dist/beacon.js`)
 
