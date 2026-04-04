@@ -47,6 +47,7 @@ function ensureUserConfig(worktree: string): {
   try {
     const defaultConfigPath = path.join(
       __dirname,
+      "..",
       "config",
       "beacon.default.json",
     );
@@ -397,8 +398,9 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
         });
       }
 
+      const queryEmbedding = await pooled.embedder.embedQuery(query);
       const results = pooled.db.search(
-        new Array(pooled.config.embedding.dimensions).fill(0),
+        queryEmbedding,
         10,
         0.01,
         query,
@@ -466,7 +468,6 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
                       type: "text",
                       text: formatProgressMessage(progress),
                       synthetic: true,
-                      ignored: true,
                     },
                   ],
                 },
@@ -484,7 +485,6 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
                 type: "text",
                 text: "✅ **Beacon Indexing Complete**\nYour codebase is now indexed and ready for semantic search.",
                 synthetic: true,
-                ignored: true,
               },
             ],
           },
@@ -667,7 +667,11 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
   return {
     event: async ({ event }) => {
       if (event.type === "session.created") {
-        const sessionID = (event as any).properties?.info?.id;
+        const sessionID =
+          (event as any).sessionID ??
+          (event as any).properties?.sessionID ??
+          (event as any).properties?.info?.id ??
+          (event as any).id;
         if (!sessionID) return;
 
         if (!isInitialized) {
@@ -731,25 +735,24 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
       if (!shellTools.includes(input.tool)) return;
 
       const command = output.args?.command || output.args?.cmd || "";
-      if (!/\bgrep\b/.test(command) || command.includes("git grep")) return;
+      if (!/\bgrep\b/.test(command) || !isGrepCodeSearch(command)) return;
 
-      // Check if this is a code search pattern (file extensions or no explicit file)
-      const isLikelyCodeSearch =
-        !command.includes(">") &&
-        !/\|\s*grep/.test(command) &&
-        (/\.(ts|tsx|js|jsx|py|go|rs|java|rb|php|sql|md)$/m.test(command) ||
-          /^[^>]*grep\s+[^|]*['"][^'"]+['"][^|]*$/m.test(command));
+      const query = extractGrepQuery(command);
+      if (!query || query.length <= 2) return;
 
-      if (isLikelyCodeSearch) {
-        const grepMatch = command.match(
-          /grep\s+(?:-[a-zA-Z]+\s+)*["']([^"']+)["']/,
-        );
-        const query = grepMatch?.[1];
+      const results = await executeGrepReplacement(query);
+      const escapedResults = results.replace(/'/g, "'\\''");
 
-        if (query && query.length > 2) {
-          // Silent fail - allow grep to proceed
-          return;
-        }
+      if (!output.args) {
+        output.args = {};
+      }
+
+      if (typeof output.args.command === "string") {
+        output.args.command = `echo '${escapedResults}'`;
+      } else if (typeof output.args.cmd === "string") {
+        output.args.cmd = `echo '${escapedResults}'`;
+      } else {
+        output.args.command = `echo '${escapedResults}'`;
       }
     },
 
@@ -816,8 +819,9 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
           try {
             pooled = await getCoordinator(worktree);
             for (const filePath of deletedFiles) {
-              pooled.coordinator.garbageCollect();
+              await pooled.db.deleteChunks(filePath);
             }
+            await pooled.coordinator.garbageCollect();
           } catch (error) {
             // Silent fail
           } finally {

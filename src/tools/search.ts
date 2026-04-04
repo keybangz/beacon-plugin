@@ -10,6 +10,15 @@ import { getCoordinator, releaseCoordinator } from "../lib/pool.js";
 
 const searchCache = new SearchCache(200, 300_000);
 const heuristicReranker = createHeuristicReranker();
+const DECLARATION_RE = /^\s*(?:export\s+)?(?:async\s+)?(?:function|class|interface|type|enum)\s+[a-zA-Z_$][\w$]*/;
+
+function buildPreview(chunkText: string): string {
+  const firstNonEmpty = chunkText.split("\n").find((l) => l.trim().length > 0) ?? "";
+  if (DECLARATION_RE.test(firstNonEmpty)) return truncateToTokenLimit(chunkText, 150);
+  const declaration = chunkText.split("\n").find((l) => DECLARATION_RE.test(l));
+  if (!declaration) return truncateToTokenLimit(chunkText, 150);
+  return truncateToTokenLimit(`${declaration.trim()}\n...\n${chunkText}`, 150);
+}
 
 const _export: ToolDefinition = tool({
   description:
@@ -83,7 +92,7 @@ const _export: ToolDefinition = tool({
               file: r.filePath,
               lines: `${r.startLine}-${r.endLine}`,
               similarity: r.similarity.toFixed(3),
-              preview: truncateToTokenLimit(r.chunkText, 150),
+              preview: buildPreview(r.chunkText),
             })),
           });
           searchCache.set(args.query, JSON.parse(output), cacheOptions);
@@ -138,7 +147,7 @@ const _export: ToolDefinition = tool({
               file: r.filePath,
               lines: `${r.startLine}-${r.endLine}`,
               similarity: r.similarity.toFixed(3),
-              preview: truncateToTokenLimit(r.chunkText, 150),
+              preview: buildPreview(r.chunkText),
               _note: (r as any)._note,
             })),
           });
@@ -153,7 +162,7 @@ const _export: ToolDefinition = tool({
             file: r.filePath,
             lines: `${r.startLine}-${r.endLine}`,
             similarity: r.similarity.toFixed(3),
-            preview: truncateToTokenLimit(r.chunkText, 150),
+            preview: buildPreview(r.chunkText),
           })),
         });
         searchCache.set(args.query, JSON.parse(output), cacheOptions);

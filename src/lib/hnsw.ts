@@ -509,7 +509,26 @@ export class HNSWVectorIndex {
       return [];
     }
 
-    const results = index.searchKnn(queryEmbedding, effectiveK);
+    // Improve ANN recall at query time without impacting index build speed.
+    // Higher efSearch explores a wider candidate graph during search.
+    const searchEf = Math.max(effectiveK * 4, 50);
+    const originalEf = this.config.efSearch;
+    if (typeof index.setEf === "function") {
+      index.setEf(searchEf);
+    } else {
+      index.efSearch = searchEf;
+    }
+
+    let results;
+    try {
+      results = index.searchKnn(queryEmbedding, effectiveK);
+    } finally {
+      if (typeof index.setEf === "function") {
+        index.setEf(originalEf);
+      } else {
+        index.efSearch = originalEf;
+      }
+    }
 
     const searchResults: SearchResult[] = [];
     for (let i = 0; i < results.neighbors.length; i++) {

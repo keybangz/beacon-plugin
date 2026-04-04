@@ -2,6 +2,28 @@
 
 All notable changes to Beacon will be documented in this file.
 
+## [2.3.0] - 2026-04-04
+
+### Fixed
+- **Grep interception** (`beacon.ts`): `tool.execute.before` grep replacement was dead code — now properly wired to run semantic search and rewrite shell command output
+- **Zero-vector search** (`beacon.ts`): `executeGrepReplacement` was passing an all-zeros embedding to `db.search()` instead of a real query embedding; now calls `embedder.embedQuery(query)`
+- **Garbage collection** (`beacon.ts`): Per-file chunk deletion now calls `db.deleteChunks(filePath)` for each removed file before running `coordinator.garbageCollect()` once
+- **Session ID extraction** (`beacon.ts`): Defensive fallback chain handles varied OpenCode event shapes
+- **Invalid SDK field** (`beacon.ts`): Removed `ignored: true` from `session.prompt()` parts — not in OpenCode SDK schema, was silently dropped
+- **Config asset path** (`beacon.ts`): Default config now correctly resolved relative to package root, not `dist/`
+- **Type errors** (`src/lib/db.ts`): Fixed TS2345 spread-args cast for `bun:sqlite` `stmt.all()` calls
+
+### Improved
+- **Search accuracy** (`src/lib/hnsw.ts`): Dynamic ef_search tuning per query (`ef = max(k×4, 50)`) with save/restore in `finally` to prevent state leak between searches
+- **Query expansion** (`src/lib/tokenizer.ts`): CamelCase splitting, identifier variant generation, auth/error/config synonym expansion; FTS5 input sanitized and terms double-quoted to prevent syntax errors
+- **Search result previews** (`src/tools/search.ts`): `buildPreview` helper prepends nearest declaration context line to mid-block chunks
+
+### Packaging
+- **Worker thread ONNX** (`package.json`): `embedder-worker.ts` now built as a separate entry to `dist/embedder-worker.js` — worker-thread ONNX path was previously non-functional in installed packages
+- **Source maps** (`package.json`): Switched from `--sourcemap=inline` to `--sourcemap=external`; bundle size reduced ~50%, source no longer embedded in published artifact
+- **Type declarations** (`tsconfig.build.json`, `package.json`): `dist/beacon.d.ts` now generated via `tsc --emitDeclarationOnly` and published — TypeScript consumers get proper types
+- **Runtime engine** (`package.json`): Removed misleading `engines.node` — package requires Bun at runtime (uses `bun:sqlite`)
+
 ## [2.1.0] - 2025-03-14
 
 ### Added

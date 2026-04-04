@@ -19,8 +19,9 @@ const COMMON_KEYWORDS = new Set([
 
 const CODE_SYNONYMS: Record<string, string[]> = {
   // Auth / access
-  "auth": ["authentication", "login", "signin", "credential"],
-  "authentication": ["auth", "login", "signin", "credential"],
+  "auth": ["authentication", "authorize", "login", "signin", "credential"],
+  "authentication": ["auth", "authorize", "login", "signin", "credential"],
+  "authorize": ["auth", "authentication", "permission", "access"],
   // Database
   "db": ["database", "sql", "query", "storage"],
   "database": ["db", "sql", "query", "storage"],
@@ -254,26 +255,55 @@ export function clearCaches(): void {
 }
 
 export function expandQuery(query: string): string[] {
-  const words = query.toLowerCase().split(/\s+/).filter(w => w.length > 0);
-  const expanded = new Set<string>(words);
-  
-  for (const word of words) {
-    const synonyms = CODE_SYNONYMS[word];
+  const rawWords = query.split(/\s+/).filter((w) => w.length > 0);
+  const expanded = new Set<string>();
+
+  for (const rawWord of rawWords) {
+    const normalizedWord = rawWord.toLowerCase();
+    expanded.add(normalizedWord);
+
+    const synonyms = CODE_SYNONYMS[normalizedWord];
     if (synonyms) {
       for (const syn of synonyms) {
         expanded.add(syn);
       }
     }
-    
-    const parts = splitCamelCase(word);
+
+    const parts = splitCamelCase(rawWord).map((part) => part.toLowerCase());
     for (const part of parts) {
       if (part.length > 2) {
         expanded.add(part);
       }
     }
+
+    for (const variant of buildIdentifierVariants(parts)) {
+      expanded.add(variant);
+    }
   }
-  
+
   return Array.from(expanded);
+}
+
+function buildIdentifierVariants(parts: string[]): string[] {
+  if (parts.length < 2) return [];
+
+  const filtered = parts.filter((p) => !["by", "to", "from", "of", "the", "a", "an", "in", "on", "for"].includes(p));
+  const base = filtered.length >= 2 ? filtered : parts;
+
+  const toCamel = (tokens: string[]) =>
+    tokens[0] + tokens.slice(1).map((t) => t.charAt(0).toUpperCase() + t.slice(1)).join("");
+
+  const variants = new Set<string>();
+  variants.add(base.join(" "));
+  variants.add(toCamel(base));
+  variants.add(base.join("_"));
+
+  if (base.length >= 2) {
+    variants.add(toCamel(base.slice(0, 2)));
+    variants.add(toCamel(base.slice(-2)));
+  }
+
+  return Array.from(variants).filter((v) => v.length > 1);
 }
 
 export function splitCamelCase(str: string): string[] {
@@ -311,11 +341,22 @@ export function buildExpandedQuery(query: string): {
   codeTerms: string[];
   ftsQuery: string;
 } {
-  const expanded = expandQuery(query);
-  const codeTerms = extractCodeTerms(query);
+  // Strip FTS5 operator/special chars before expansion so generated MATCH terms
+  // are always syntactically valid (e.g. "foo-bar" should not parse as "foo - bar").
+  const sanitizedQuery = query.replace(FTS_SPECIAL_CHARS, " ");
+
+  const expanded = expandQuery(sanitizedQuery);
+  const codeTerms = extractCodeTerms(sanitizedQuery);
   
-  const allTerms = [...new Set([...expanded, ...codeTerms])];
-  const ftsQuery = allTerms.slice(0, 20).join(" OR ");
+  const allTerms = [...new Set([...expanded, ...codeTerms])]
+    .map((term) => term.replace(FTS_SPECIAL_CHARS, " ").trim())
+    .filter((term) => term.length > 0);
+
+  // Quote each term so FTS5 treats it as a phrase literal and avoids operator parsing.
+  const ftsQuery = allTerms
+    .slice(0, 20)
+    .map((term) => `"${term.replace(/"/g, '""')}"`)
+    .join(" OR ");
   
   return {
     original: query,

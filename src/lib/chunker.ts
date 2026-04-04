@@ -83,7 +83,7 @@ function estimateTokens(text: string): number {
   // The standard BPE 4 chars/token rule applies to natural-language prose;
   // code typically sits closer to 2-3 chars/token due to dense punctuation
   // and single-character operators. Using 3 gives a ~33 % safety margin that
-  // prevents Ollama "input length exceeds context length" errors.
+  // prevents embedding input-length-over-context errors.
   return Math.ceil(text.length / 3);
 }
 

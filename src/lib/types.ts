@@ -5,7 +5,7 @@
 
 // Configuration Types
 export interface EmbeddingConfig {
-  /** API endpoint for embeddings (e.g., Ollama, OpenAI, etc.) */
+  /** API endpoint for embeddings when using API mode (e.g., OpenAI-compatible endpoint). Set to "local" for on-device ONNX inference. */
   api_base: string;
   /** Embedding model name */
   model: string;

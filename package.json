@@ -1,7 +1,8 @@
 {
   "name": "beacon-opencode",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "type": "module",
+  "types": "./dist/beacon.d.ts",
   "description": "Beacon — semantic code search for OpenCode (replaces grep with hybrid search)",
   "author": {
     "name": "keybangz"
@@ -39,11 +40,11 @@
   ],
   "scripts": {
     "clean": "rm -rf dist",
-    "build": "bun build ./beacon.ts --outdir dist --target bun --sourcemap=inline",
-    "dev": "bun build ./beacon.ts --outdir dist --target bun --sourcemap=inline --watch",
+    "build": "bun build ./beacon.ts --outdir dist --target bun --sourcemap=external && bun build ./src/lib/embedder-worker.ts --outdir dist --entry-naming embedder-worker.js --target bun --sourcemap=external",
+    "dev": "bun build ./beacon.ts --outdir dist --target bun --sourcemap=external --watch & bun build ./src/lib/embedder-worker.ts --outdir dist --entry-naming embedder-worker.js --target bun --sourcemap=external --watch",
     "test": "bun test",
     "type-check": "tsc --noEmit",
-    "prepublishOnly": "bun run clean && bun run build",
+    "prepublishOnly": "bun run clean && bun run build && bunx tsc --project tsconfig.build.json && rm -rf dist/src",
     "postinstall": "node scripts/setup.cjs"
   },
   "dependencies": {
@@ -74,7 +75,6 @@
     "provenance": true
   },
   "engines": {
-    "node": ">=18.0.0",
     "bun": ">=1.0.23"
   }
 }

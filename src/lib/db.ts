@@ -952,7 +952,9 @@ export class BeaconDatabase {
     // Cap to avoid loading the entire table into memory on very large repos.
     sql += ` LIMIT ${BeaconDatabase.BRUTE_FORCE_SCAN_LIMIT}`;
 
-    const rows = this.db.prepare(sql).all(...params) as Array<{
+    const rows = this.db
+      .prepare(sql)
+      .all(...(params as import("bun:sqlite").SQLQueryBindings[])) as Array<{
       file_path: string;
       start_line: number;
       end_line: number;
@@ -1089,7 +1091,9 @@ export class BeaconDatabase {
 
     try {
       const stmt = this.db.prepare(sql);
-      const rows = stmt.all(...params) as Array<{
+      const rows = stmt.all(
+        ...(params as import("bun:sqlite").SQLQueryBindings[]),
+      ) as Array<{
         file_path: string;
         start_line: number;
         end_line: number;
