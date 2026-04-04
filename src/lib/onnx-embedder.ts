@@ -22,13 +22,6 @@ async function ensureOnnx(): Promise<boolean> {
         InferenceSession: mod.InferenceSession,
         Tensor: mod.Tensor,
       };
-      // Suppress global ORT C++ logger warnings. The per-session `logSeverityLevel`
-      // option only controls run-time logging; the "Some nodes were not assigned to
-      // the preferred execution providers" warning is emitted during EP assignment
-      // at session-creation time through the global ORT environment logger.
-      // Setting env.logLevel = 'error' (≡ level 3) silences it globally.
-      // This is harmless: initialization errors are still surfaced via the
-      // InferenceSession.create() rejection path.
       try {
         if (mod.env && typeof mod.env === "object") {
           (mod.env as any).logLevel = "error";

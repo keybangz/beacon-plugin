@@ -4,7 +4,7 @@ Semantic code search plugin for OpenCode using **hybrid retrieval** (vector embe
 
 - **npm package**: `beacon-opencode`
 - **Repository**: `beacon-plugin`
-- **Current version**: `2.3.0`
+- **Current version**: `2.3.1`
 - **Development runtime**: **Bun**
 - **Plugin entry point**: `beacon.ts` (build output: `dist/beacon.js`)
 
@@ -157,12 +157,13 @@ beacon-plugin/
 ├── config/
 │   └── beacon.default.json      # Shipped default config
 ├── scripts/
-│   └── setup.cjs                # postinstall setup script
+│   ├── setup.cjs                # postinstall setup script
+│   ├── shard-runner.cjs         # test shard runner
+│   └── test-reporter.cjs        # test reporter
 ├── tsconfig.build.json          # Declaration-only tsc build config
 ├── dist/
 │   ├── beacon.js                # Bundled plugin entry (bun run build)
 │   ├── beacon.js.map            # External source map
-│   ├── beacon.d.ts              # TypeScript declarations (tsc --emitDeclarationOnly)
 │   ├── embedder-worker.js       # ONNX worker thread bundle
 │   └── embedder-worker.js.map   # Worker external source map
 └── package.json

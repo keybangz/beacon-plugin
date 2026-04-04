@@ -4,13 +4,15 @@
  * Beacon Plugin Setup Script
  * 
  * This script runs after plugin installation to:
- * 1. Ensure .opencode directory exists in the current working directory
- * 2. Create default configuration if not present
- * 3. Ensure the plugin is ready for auto-indexing
+ * 1. Install native dependencies (hnswlib-node, onnxruntime-node) via npm
+ * 2. Ensure .opencode directory exists in the current working directory
+ * 3. Create default configuration if not present
+ * 4. Ensure the plugin is ready for auto-indexing
  */
 
 const { mkdirSync, existsSync, writeFileSync, readFileSync } = require('fs');
 const { join } = require('path');
+const { execSync } = require('child_process');
 
 const DEFAULT_CONFIG = {
   embedding: {
@@ -79,6 +81,32 @@ const DEFAULT_CONFIG = {
 function setupPlugin() {
   try {
     console.log('🔧 Setting up Beacon plugin...');
+
+    // Step 1: Install native dependencies via npm.
+    // bun strips node_modules from tgz extraction, so we install them explicitly.
+    // We install into the package root (__dirname/..) so the bundle can resolve them.
+    const pkgRoot = join(__dirname, '..');
+    const nativeDepsNeeded = [
+      { name: 'hnswlib-node', version: '3.0.0', check: join(pkgRoot, 'node_modules', 'hnswlib-node', 'build', 'Release', 'addon.node') },
+      { name: 'onnxruntime-node', version: '1.24.3', check: join(pkgRoot, 'node_modules', 'onnxruntime-node', 'lib', 'index.js') },
+    ];
+    for (const dep of nativeDepsNeeded) {
+      if (!existsSync(dep.check)) {
+        console.log(`📦 Installing native dependency: ${dep.name}@${dep.version}...`);
+        try {
+          execSync(`npm install --prefix "${pkgRoot}" ${dep.name}@${dep.version} --no-save --ignore-scripts=false`, {
+            stdio: 'inherit',
+            timeout: 120000,
+          });
+          console.log(`✅ ${dep.name} installed`);
+        } catch (err) {
+          console.warn(`⚠️  Failed to install ${dep.name}: ${err.message}`);
+          console.warn('   HNSW/embeddings will be unavailable until this is resolved.');
+        }
+      } else {
+        console.log(`✅ ${dep.name} already present`);
+      }
+    }
     
     // Get current working directory (where OpenCode is running)
     const cwd = process.cwd();

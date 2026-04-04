@@ -2,6 +2,16 @@
 
 All notable changes to Beacon will be documented in this file.
 
+## [2.3.1] - 2026-04-04
+
+### Fixed
+- **HNSW entries persistence** (`src/lib/hnsw.ts`): `saveToDisk()` was writing the JSON entries data to `hnsw.index.tmp` then renaming it over the binary index file — causing `hnsw.index` to be corrupted with JSON content and `hnsw.entries.json` to never be written. Fixed: binary index is written directly via `writeIndex()`, JSON entries are written to `hnsw.entries.json.tmp` then atomically renamed to `hnsw.entries.json`. HNSW index now persists across restarts correctly.
+- **Similarity scores clamped to 1.000** (`src/lib/db.ts`): `hybridSearch()` normalised scores against a per-result theoretical ceiling that did not account for `fileTypeMultiplier` (1.2× for `.ts` files) or `identifierBoost` — every `.ts` result exceeded the ceiling and was clamped to 1.0. Fixed: two-pass normalization, `similarity = rrfScore / maxRrf`, correctly spans the full [0,1] range.
+
+### Packaging
+- **postinstall** (`scripts/setup.cjs`): postinstall script now runs `npm install` for `hnswlib-node` and `onnxruntime-node` if their native binaries are not present in the install location — ensures native deps are available regardless of how the package is installed.
+- **GitHub release** (`.github/workflows/release.yml`): packed `.tgz` tarball is now attached as a release asset on every GitHub release.
+
 ## [2.3.0] - 2026-04-04
 
 ### Fixed

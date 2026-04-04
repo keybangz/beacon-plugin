@@ -1227,19 +1227,14 @@ export class BeaconDatabase {
       const fileTypeMultiplier = getFileTypeMultiplier(result.filePath);
       result.rrfScore = rrfScore * identifierBoost * fileTypeMultiplier * wRrf;
 
-      // Normalize to 0-1 for display.
-      // The theoretical per-result ceiling depends on which lists it appears in:
-      //   both lists → max = (wVector + wBm25) / (k+1)
-      //   vector only → max = wVector / (k+1)
-      //   bm25 only   → max = wBm25   / (k+1)
-      // Multiply by wRrf (and assume no identifier/filetype boost >1 for the ceiling).
-      const rawCeiling =
-        ((result.ranks.vector ? wVector : 0) +
-         (result.ranks.bm25   ? wBm25   : 0)) /
-        (k + 1);
-      const ceiling = rawCeiling * wRrf;
-      const normalizedScore = ceiling > 0 ? Math.min(1, result.rrfScore / ceiling) : 0;
-      result.similarity = normalizedScore;
+    }
+
+    // Normalize similarity scores relative to the actual max rrfScore.
+    // Two-pass approach correctly handles fileTypeMultiplier and identifierBoost
+    // values >1 that would push per-result scores above a theoretical ceiling.
+    const maxRrf = Math.max(...Array.from(combined.values()).map((r) => r.rrfScore), 0);
+    for (const [, result] of combined) {
+      result.similarity = maxRrf > 0 ? result.rrfScore / maxRrf : 0;
     }
 
     // Filter by threshold (using normalized score) and sort by RRF score

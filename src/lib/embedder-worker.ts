@@ -46,8 +46,6 @@ async function ensureOrt(): Promise<boolean> {
   try {
     const mod = await import("onnxruntime-node");
     _ort = { InferenceSession: mod.InferenceSession, Tensor: mod.Tensor };
-    // Suppress global ORT C++ logger — the EP-assignment warning fires through
-    // the global Ort::Env logger before per-session logSeverityLevel takes effect.
     try {
       if (mod.env && typeof mod.env === "object") {
         (mod.env as any).logLevel = "error";

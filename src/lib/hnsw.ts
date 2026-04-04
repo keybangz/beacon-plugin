@@ -170,15 +170,14 @@ export class HNSWVectorIndex {
       mkdirSync(dir, { recursive: true });
     }
 
-    // Write to a temporary file first, then atomically rename.
-    // This prevents index corruption if the process crashes mid-write.
-    const tmpPath = `${this.indexPath}.tmp`;
-
     try {
+      // Write binary HNSW index directly (writeIndex handles its own atomicity)
       this.index?.writeIndex(this.indexPath);
 
-      // Stream-write JSON in chunks to avoid building a single massive string
-      // in memory. Each section is written incrementally.
+      // Stream-write JSON entries to a temp file, then atomically rename.
+      // This prevents entries corruption if the process crashes mid-write.
+      const entriesTmpPath = `${this.entriesPath}.tmp`;
+
       const parts: string[] = [];
       parts.push('{"entries":[');
       let first = true;
@@ -210,20 +209,15 @@ export class HNSWVectorIndex {
       }
       parts.push('}}');
 
-      writeFileSync(tmpPath, parts.join(''));
+      writeFileSync(entriesTmpPath, parts.join(''));
       
-      // Atomic rename to prevent corruption on crash
+      // Atomic rename entries file
       try {
-        unlinkSync(this.indexPath);
-      } catch {
-        // Ignore if original doesn't exist
-      }
-      try {
-        renameSync(tmpPath, this.indexPath);
+        renameSync(entriesTmpPath, this.entriesPath);
       } catch {
         // Fallback: copy and delete
-        copyFileSync(tmpPath, this.indexPath);
-        unlinkSync(tmpPath);
+        copyFileSync(entriesTmpPath, this.entriesPath);
+        unlinkSync(entriesTmpPath);
       }
       
       this.isDirty = false;

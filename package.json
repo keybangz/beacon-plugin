@@ -1,9 +1,9 @@
 {
   "name": "beacon-opencode",
-  "version": "2.3.0",
+  "version": "2.3.1",
   "type": "module",
   "types": "./dist/beacon.d.ts",
-  "description": "Beacon — semantic code search for OpenCode (replaces grep with hybrid search)",
+  "description": "Beacon \u2014 semantic code search for OpenCode (replaces grep with hybrid search)",
   "author": {
     "name": "keybangz"
   },
@@ -11,8 +11,10 @@
   "exports": {
     ".": {
       "types": "./dist/beacon.d.ts",
-      "default": "./dist/beacon.js"
-    }
+      "default": "./dist/beacon.js",
+      "beacon": "./dist/beacon.js"
+    },
+    "./server": "./dist/beacon.js"
   },
   "repository": {
     "type": "git",
@@ -40,8 +42,8 @@
   ],
   "scripts": {
     "clean": "rm -rf dist",
-    "build": "bun build ./beacon.ts --outdir dist --target bun --sourcemap=external && bun build ./src/lib/embedder-worker.ts --outdir dist --entry-naming embedder-worker.js --target bun --sourcemap=external",
-    "dev": "bun build ./beacon.ts --outdir dist --target bun --sourcemap=external --watch & bun build ./src/lib/embedder-worker.ts --outdir dist --entry-naming embedder-worker.js --target bun --sourcemap=external --watch",
+    "build": "bun build ./beacon.ts --outdir dist --target bun --sourcemap=external --external hnswlib-node --external onnxruntime-node && bun build ./src/lib/embedder-worker.ts --outdir dist --entry-naming embedder-worker.js --target bun --sourcemap=external",
+    "dev": "bun build ./beacon.ts --outdir dist --target bun --sourcemap=external --external hnswlib-node --external onnxruntime-node --watch & bun build ./src/lib/embedder-worker.ts --outdir dist --entry-naming embedder-worker.js --target bun --sourcemap=external --watch",
     "test": "bun test",
     "type-check": "tsc --noEmit",
     "prepublishOnly": "bun run clean && bun run build && bunx tsc --project tsconfig.build.json && rm -rf dist/src",
@@ -76,5 +78,6 @@
   },
   "engines": {
     "bun": ">=1.0.23"
-  }
+  },
+  "main": "./dist/beacon.js"
 }
