@@ -64,8 +64,8 @@ function ensureUserConfig(worktree: string): {
     defaultConfig = {
       embedding: {
         api_base: "local",
-        model: "jina-embeddings-v2-base-code",
-        dimensions: 768,
+        model: "all-MiniLM-L6-v2",
+        dimensions: 384,
         batch_size: 32,
         context_limit: 256,
         query_prefix: "",
@@ -449,6 +449,7 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
       // Skip if already indexed and not forcing reindex
       if (!forceReindex && stats.total_chunks > 0) {
         await releaseCoordinator(worktree);
+        pooled = null;
         return;
       }
 
@@ -501,6 +502,61 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
         } catch (releaseError) {
           // Silent fail
         }
+      }
+    }
+  }
+
+  async function checkModelChanged(sessionID: string): Promise<boolean> {
+    if (!isInitialized || !config) return false;
+
+    let pooled;
+    try {
+      pooled = await getCoordinator(worktree);
+      const indexedModel = pooled.db.getSyncState("indexed_model");
+      const indexedDimensions = pooled.db.getSyncState("indexed_dimensions");
+      const currentModel = config.embedding.model;
+      const currentDimensions = String(config.embedding.dimensions);
+
+      if (!indexedModel) {
+        // Never stored — index was built before this feature; no action
+        await releaseCoordinator(worktree);
+        pooled = null;
+        return false;
+      }
+
+      const modelChanged = indexedModel !== currentModel;
+      const dimsChanged = indexedDimensions && indexedDimensions !== currentDimensions;
+
+      if (modelChanged || dimsChanged) {
+        await releaseCoordinator(worktree);
+        pooled = null;
+
+        // Notify user about model change
+        await client.session.prompt({
+          path: { id: sessionID },
+          body: {
+            noReply: true,
+            parts: [{
+              type: "text",
+              text: `⚠️ **Beacon: Embedding Model Changed**\nPrevious index used \`${indexedModel}\` (${indexedDimensions}d). Current model is \`${currentModel}\` (${currentDimensions}d). Triggering full reindex...`,
+            }],
+          },
+        });
+
+        // Trigger full reindex
+        await performAutoIndex(sessionID, true);
+        return true;
+      }
+
+      return false;
+    } catch (error) {
+      // Silent fail
+      return false;
+    } finally {
+      if (pooled) {
+        try {
+          await releaseCoordinator(worktree);
+        } catch {}
       }
     }
   }
@@ -648,48 +704,21 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
         // Non-fatal: watch might fail on some filesystems
       }
 
-      fileWatcher.on("add", async (filePath: string) => {
+      fileWatcher.on("batch", async (eventType: "add" | "change" | "unlink", filePaths: string[]) => {
         let pooled;
         try {
           pooled = await getCoordinator(worktree);
-          await pooled.coordinator.reembedFile(filePath);
-        } catch (error) {
-          // Silent fail
-        } finally {
-          if (pooled) {
-            try {
-              await releaseCoordinator(worktree);
-            } catch (releaseError) {
-              // Silent fail
-            }
+          if (eventType === "add" || eventType === "change") {
+            // Process in parallel (each reembedFile is independent)
+            await Promise.allSettled(
+              filePaths.map((filePath) => pooled!.coordinator.reembedFile(filePath))
+            );
+          } else if (eventType === "unlink") {
+            await Promise.allSettled(
+              filePaths.map((filePath) => pooled!.db.deleteChunks(filePath))
+            );
+            await pooled.coordinator.garbageCollect();
           }
-        }
-      });
-
-      fileWatcher.on("change", async (filePath: string) => {
-        let pooled;
-        try {
-          pooled = await getCoordinator(worktree);
-          await pooled.coordinator.reembedFile(filePath);
-        } catch (error) {
-          // Silent fail
-        } finally {
-          if (pooled) {
-            try {
-              await releaseCoordinator(worktree);
-            } catch (releaseError) {
-              // Silent fail
-            }
-          }
-        }
-      });
-
-      fileWatcher.on("unlink", async (filePath: string) => {
-        let pooled;
-        try {
-          pooled = await getCoordinator(worktree);
-          pooled.db.deleteChunks(filePath);
-          pooled.coordinator.garbageCollect();
         } catch (error) {
           // Silent fail
         } finally {
@@ -780,29 +809,36 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
             });
           }
         } else {
-          // Check if indexing is needed and show status
-          let pooled;
           try {
-            pooled = await getCoordinator(worktree);
-            const stats = pooled.db.getStats();
+            const didReindex = await checkModelChanged(sessionID);
+            if (!didReindex) {
+              // Check if indexing is needed and show status
+              let pooled;
+              try {
+                pooled = await getCoordinator(worktree);
+                const stats = pooled.db.getStats();
 
-            if (stats.total_chunks === 0 && config?.indexing.auto_index) {
-              await releaseCoordinator(worktree);
-              pooled = null;
-              try {
-                await performAutoIndex(sessionID);
-              } catch (error) {
-                // Silent fail
+                if (stats.total_chunks === 0 && config?.indexing.auto_index) {
+                  await releaseCoordinator(worktree);
+                  pooled = null;
+                  try {
+                    await performAutoIndex(sessionID);
+                  } catch {
+                    // Silent fail
+                  }
+                }
+              } finally {
+                if (pooled) {
+                  try {
+                    await releaseCoordinator(worktree);
+                  } catch {
+                    // Silent fail
+                  }
+                }
               }
             }
-          } finally {
-            if (pooled) {
-              try {
-                await releaseCoordinator(worktree);
-              } catch (releaseError) {
-                // Silent fail
-              }
-            }
+          } catch {
+            // Silent fail
           }
         }
       }

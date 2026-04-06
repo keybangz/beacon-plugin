@@ -1,8 +1,8 @@
 {
   "embedding": {
     "api_base": "local",
-    "model": "jina-embeddings-v2-base-code",
-    "dimensions": 768,
+    "model": "all-MiniLM-L6-v2",
+    "dimensions": 384,
     "batch_size": 32,
     "context_limit": 256,
     "query_prefix": "",

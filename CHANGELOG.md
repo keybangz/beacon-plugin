@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.4.1] - 2026-04-06
+
+### Fixed
+- **`[BEACON_NOTIFICATION]` suppression system removed** (`beacon.ts`): The suppression context injected via `client.session.prompt()` on `session.created` was causing all subagent delegations to use the "Build" profile model — `noReply: true` is still broken upstream (GitHub issue #6513, affects `@opencode-ai/sdk` ≤1.3.2) and resets the session model on every call. Removed the entire suppression injection block. Beacon progress messages are sent as plain prompts; the AI may respond to them, which is acceptable.
+- **Default embedding model corrected** (`config/beacon.default.json`, `beacon.ts`): Default config and hardcoded fallback both referenced `jina-embeddings-v2-base-code` (768d) — a model that fails to download (404 on the ONNX file). Changed default to `all-MiniLM-L6-v2` (384d), which is reliably available. This prevents dimension mismatch between a freshly-created DB and a new install's config.
+
 ## [2.4.0] - 2026-04-06
 
 ### Fixed

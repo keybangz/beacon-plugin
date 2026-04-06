@@ -1,5 +1,6 @@
 import chokidar, { FSWatcher } from "chokidar";
 import { EventEmitter } from "events";
+import { relative, isAbsolute } from "path";
 import type { BeaconConfig } from "./types.js";
 import { shouldIndex } from "./ignore.js";
 
@@ -42,6 +43,19 @@ export class FileWatcher extends EventEmitter {
 
   // New batching handler for file events
   private handleBatchEvent(event: "add" | "change" | "unlink", filePath: string): void {
+    // Normalize: strip leading './' or absolute prefix so the path is always
+    // relative to repoRoot without any leading separator.
+    if (filePath.startsWith("./")) {
+      filePath = filePath.slice(2);
+    } else if (isAbsolute(filePath)) {
+      // Convert absolute path back to relative (chokidar should not emit these with cwd set,
+      // but guard defensively)
+      const rel = relative(this.repoRoot, filePath);
+      if (!rel.startsWith("..")) {
+        filePath = rel;
+      }
+    }
+
     if (!shouldIndex(filePath, this.config.indexing.include, this.config.indexing.exclude)) {
       return;
     }

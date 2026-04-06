@@ -171,6 +171,9 @@ export class IndexCoordinator {
       const filesIndexed = await this.indexFiles(filesToIndex, onProgress, true /* skipHnswRemove — index was just cleared */);
 
       this.db.setSyncState("last_full_sync", new Date().toISOString());
+      // Record which model was used to build this index
+      this.db.setSyncState("indexed_model", this.config.embedding.model);
+      this.db.setSyncState("indexed_dimensions", String(this.config.embedding.dimensions));
       this.db.setSyncState("sync_status", "idle");
 
       await this.emitProgress({
@@ -282,6 +285,9 @@ export class IndexCoordinator {
       await Promise.all(orphans.map((f) => this.db.deleteChunks(f)));
 
       this.db.setSyncState("last_full_sync", new Date().toISOString());
+      // Record which model was used to build this index
+      this.db.setSyncState("indexed_model", this.config.embedding.model);
+      this.db.setSyncState("indexed_dimensions", String(this.config.embedding.dimensions));
       this.db.setSyncState("sync_status", "idle");
 
       return { success: true, filesIndexed };
