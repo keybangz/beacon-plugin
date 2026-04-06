@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.4.0] - 2026-04-06
+
+### Fixed
+- **File watcher silent drop** (`src/lib/watcher.ts`, `beacon.ts`): The chokidar file watcher batches events and emits a single `"batch"` event — but `beacon.ts` was registered on individual `"add"`, `"change"`, and `"unlink"` events which the `FileWatcher` class never emits. All file changes were silently dropped. Fixed: replaced three dead individual event listeners with a single `.on("batch", async (eventType, filePaths) => { ... })` handler using `Promise.allSettled` for parallel processing.
+- **Path normalization in watcher** (`src/lib/watcher.ts`): chokidar may emit paths with a `./` prefix or as absolute paths. `shouldIndex()` expects repo-relative paths without leading separators. Added normalization in `handleBatchEvent()`: strips `./` prefix and converts absolute paths via `relative(repoRoot, filePath)` before calling `shouldIndex()`.
+- **Connection pool double-release** (`beacon.ts`): In `performAutoIndex()` and `checkModelChanged()`, early-return paths inside `try/finally` blocks released the coordinator and returned — but the `finally` guard (`if (pooled)`) fired a second release on the same handle. Fixed by setting `pooled = null` immediately after release in each early-return path.
+
+### Added
+- **Automatic embedding model change detection** (`beacon.ts`, `src/lib/sync.ts`): On each new session, Beacon now checks whether the embedding model and dimensions stored in the index (`indexed_model`, `indexed_dimensions` in DB sync_state) match the current config. If they differ, Beacon notifies the user and automatically triggers a forced full reindex so the index stays coherent with the active model. The `indexed_model` and `indexed_dimensions` keys are written to sync_state after every successful full index or diff sync.
+- **`[BEACON_NOTIFICATION]` suppression system** (`beacon.ts`): Beacon sends automated progress messages via `client.session.prompt()`. Since OpenCode's `noReply: true` flag does not suppress AI responses (known upstream issue), all Beacon-originated messages are now prefixed with `[BEACON_NOTIFICATION]` and a suppression instruction is injected into the session context at startup. This prevents the AI from responding to indexing status messages.
+
 All notable changes to Beacon will be documented in this file.
 
 ## [2.3.2] - 2026-04-04
