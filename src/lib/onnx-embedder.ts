@@ -65,6 +65,11 @@ export interface ONNXEmbedderConfig {
    * Defaults to 32 if not specified.
    */
   batchSize?: number;
+  /**
+   * Optional explicit vocab filename (e.g. "vocab.json" for Jina/CodeBERT models).
+   * If not set, initialize() will probe for vocab.txt then vocab.json automatically.
+   */
+  vocabFilename?: string;
 }
 
 interface Tokenizer {
@@ -168,7 +173,16 @@ export class ONNXEmbedder {
         }
       }
 
-      const vocabPath = join(dirname(this.config.modelPath), "vocab.txt");
+      // Check vocab.txt first (BERT/MiniLM models), then vocab.json (CodeBERT/Jina models)
+      let vocabPath: string;
+      if (this.config.vocabFilename) {
+        vocabPath = join(dirname(this.config.modelPath), this.config.vocabFilename);
+      } else {
+        // Probe: BERT/MiniLM use vocab.txt; CodeBERT/Jina use vocab.json
+        const txtPath = join(dirname(this.config.modelPath), "vocab.txt");
+        const jsonPath = join(dirname(this.config.modelPath), "vocab.json");
+        vocabPath = existsSync(txtPath) ? txtPath : jsonPath;
+      }
       if (existsSync(vocabPath)) {
         const modelType = this.config.modelType ?? "bert";
         if (modelType === "codebert" || modelType === "unixcoder") {
@@ -177,9 +191,12 @@ export class ONNXEmbedder {
           this.tokenizer = new BertTokenizer(vocabPath);
         }
       } else {
+        const checked = this.config.vocabFilename
+          ? vocabPath
+          : `${join(dirname(this.config.modelPath), "vocab.txt")} or vocab.json`;
         return {
           ok: false,
-          error: `Vocabulary not found at ${vocabPath}`,
+          error: `Vocabulary not found at ${checked}`,
         };
       }
 

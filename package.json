@@ -1,6 +1,6 @@
 {
   "name": "beacon-opencode",
-  "version": "2.4.1",
+  "version": "2.4.2",
   "type": "module",
   "types": "./dist/beacon.d.ts",
   "description": "Beacon \u2014 semantic code search for OpenCode (replaces grep with hybrid search)",

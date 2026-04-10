@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.4.2] - 2026-04-10
+
+### Fixed
+- **Vocab file extension for codebert/unixcoder/jina models** (`src/tools/download-model.ts`): The `vocabUrl` fields for `codebert-base`, `unixcoder-base`, and `jina-embeddings-v2-base-code` incorrectly pointed to `vocab.txt` — these models publish `vocab.json` on HuggingFace. Fixed all three URL strings to use `.json`. The download path now derives the local filename from the URL (rather than hardcoding `vocab.txt`), so future models with non-standard vocab filenames will work correctly without code changes.
+- **ONNX embedder hardcoded `vocab.txt` lookup** (`src/lib/onnx-embedder.ts`): `initialize()` only searched for `vocab.txt` and returned an error if not found, causing `codebert-base`, `unixcoder-base`, and `jina-embeddings-v2-base-code` to fail at load time even when correctly downloaded. Fixed: now probes for `vocab.txt` first, falls back to `vocab.json`, with a clear error message if neither exists.
+
 ## [2.4.1] - 2026-04-06
 
 ### Fixed

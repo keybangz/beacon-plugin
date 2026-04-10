@@ -39,7 +39,7 @@ const MODELS: Record<string, {
   "codebert-base": {
     url: "https://huggingface.co/microsoft/codebert-base/resolve/main/onnx/model.onnx",
     dimensions: 768,
-    vocabUrl: "https://huggingface.co/microsoft/codebert-base/resolve/main/vocab.txt",
+    vocabUrl: "https://huggingface.co/microsoft/codebert-base/resolve/main/vocab.json",
     type: "codebert",
     description: "Microsoft CodeBERT. Code-aware NL+PL model, strong for NL→code retrieval.",
     sizeMb: 480,
@@ -47,7 +47,7 @@ const MODELS: Record<string, {
   "unixcoder-base": {
     url: "https://huggingface.co/microsoft/unixcoder-base/resolve/main/onnx/model.onnx",
     dimensions: 768,
-    vocabUrl: "https://huggingface.co/microsoft/unixcoder-base/resolve/main/vocab.txt",
+    vocabUrl: "https://huggingface.co/microsoft/unixcoder-base/resolve/main/vocab.json",
     type: "unixcoder",
     description: "Microsoft UniXcoder. Cross-modal code model, great for code clone detection.",
     sizeMb: 470,
@@ -58,7 +58,7 @@ const MODELS: Record<string, {
     // Best overall quality for NL→code and code→code retrieval.
     url: "https://huggingface.co/jinaai/jina-embeddings-v2-base-code/resolve/main/onnx/model_quantized.onnx",
     dimensions: 768,
-    vocabUrl: "https://huggingface.co/jinaai/jina-embeddings-v2-base-code/resolve/main/vocab.txt",
+    vocabUrl: "https://huggingface.co/jinaai/jina-embeddings-v2-base-code/resolve/main/vocab.json",
     type: "sentence-transformer",
     description: "Jina v2 code model (int8 quantized). Best code-specific quality. 30 PLs. Recommended upgrade from MiniLM.",
     sizeMb: 162,
@@ -138,9 +138,16 @@ const _export: ToolDefinition = tool({
     const modelsDir = join(homedir(), ".cache", "beacon", "models");
     const modelDir = join(modelsDir, model);
     const modelPath = join(modelDir, "model.onnx");
-    const vocabPath = join(modelDir, "vocab.txt");
 
-    if (existsSync(modelPath)) {
+    // Derive vocab filename from URL (e.g., vocab.txt or vocab.json)
+    const vocabFilename = modelInfo.vocabUrl
+      ? modelInfo.vocabUrl.split("/").pop()!.split("?")[0]
+      : "vocab.txt";
+    const vocabPath = join(modelDir, vocabFilename);
+
+    // Only skip download if both model and vocab exist
+    const vocabExists = modelInfo.vocabUrl ? existsSync(vocabPath) : true;
+    if (existsSync(modelPath) && vocabExists) {
       const modelStats = statSync(modelPath);
       const modelSize = modelStats.size / 1024 / 1024;
       const notes = model === "nomic-embed-text-v1.5"
@@ -235,7 +242,7 @@ const _export: ToolDefinition = tool({
         `Description: ${modelInfo.description}`,
         `Integrity:`,
         `  model.onnx SHA-256: ${modelHash}`,
-        modelInfo.vocabUrl ? `  vocab.txt  SHA-256: ${vocabHash}` : null,
+        modelInfo.vocabUrl ? `  ${vocabFilename}  SHA-256: ${vocabHash}` : null,
         `  Tip: Verify these hashes against the checksums published at https://github.com/keybangz/beacon-opencode/releases`,
         ``,
         `To apply globally (all projects), add to ${globalConfigPath}:`,
@@ -243,7 +250,7 @@ const _export: ToolDefinition = tool({
         ``,
         `To apply to this project only, add to .opencode/beacon.json instead.`,
         gpuNote,
-      ].join("\n");
+      ].filter(Boolean).join("\n");
     } catch (error) {
       return `Failed to download model: ${error instanceof Error ? error.message : String(error)}`;
     }
