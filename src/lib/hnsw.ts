@@ -543,19 +543,6 @@ export class HNSWVectorIndex {
     return searchResults;
   }
 
-  searchWithPathFilter(
-    queryEmbedding: number[],
-    topK: number,
-    pathPrefix: string,
-  ): SearchResult[] {
-    const candidateMultiplier = 5;
-    const candidates = this.search(queryEmbedding, topK * candidateMultiplier);
-
-    return candidates
-      .filter((r) => r.filePath.startsWith(pathPrefix))
-      .slice(0, topK);
-  }
-
   /**
    * Search with path prefix using fileToChunkIds index for efficient path filtering.
    * This avoids scanning all candidates when only specific path prefixes are needed.

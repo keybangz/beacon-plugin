@@ -10,6 +10,11 @@
 
 ### Added
 - **HNSW path pre-filter optimization** (`src/lib/hnsw.ts`): Added `searchWithPathFilterIndexed()` method that uses the `fileToChunkIds` map for efficient path prefix filtering instead of scanning all candidates.
+- **Persistent identifier cache** (`src/lib/db.ts`): Made `identifierCache` a persistent class field instead of a local Map per call. Caches `extractIdentifiers()` results across searches and clears on cache invalidation.
+
+### Changed
+- **searchWithPathFilterIndexed now used** (`src/lib/db.ts`): Switched from `searchWithPathFilter` (scans all candidates) to `searchWithPathFilterIndexed` (uses fileToChunkIds for O(1) path membership check).
+- **Removed dead searchWithPathFilter** (`src/lib/hnsw.ts`): Old method that scanned all candidates after search is removed; only the optimized indexed version remains.
 
 ### Removed
 - **Dead code: garbageCollect** (`src/lib/sync.ts`): Removed unused `garbageCollect()` method and associated tests. The method was never called anywhere in the codebase and `performDiffSync` already handles orphan cleanup inline.

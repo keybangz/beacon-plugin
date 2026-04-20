@@ -75,6 +75,8 @@ export class BeaconDatabase {
   private stmtDeleteChunksByFile!: ReturnType<Database["prepare"]>;
   /** Approximate row limit for the metrics table. Pruned periodically. */
   private static readonly METRICS_MAX_ROWS = 10000;
+  /** Persistent cache for extractIdentifiers results, keyed by chunk text. */
+  private identifierCache = new Map<string, Set<string>>();
 
   constructor(dbPath: string, dimensions: number, useHNSW: boolean = true, hnswMaxElements?: number) {
     try {
@@ -834,6 +836,7 @@ export class BeaconDatabase {
   clearCache(): void {
     this.db.exec("DELETE FROM search_cache");
     this.db.exec("DELETE FROM cache_stats");
+    this.identifierCache.clear();
   }
 
   /**
@@ -895,7 +898,7 @@ export class BeaconDatabase {
     if (this.hnswIndex && !this.hnswInitPromise) {
       let results: SearchResult[];
       if (pathPrefix) {
-        results = this.hnswIndex.searchWithPathFilter(
+        results = this.hnswIndex.searchWithPathFilterIndexed(
           queryEmbedding,
           limit,
           pathPrefix,
@@ -1225,7 +1228,6 @@ export class BeaconDatabase {
     // Calculate hybrid scores using weighted RRF
     const queryIdentifiers = extractIdentifiers(query);
     const k = 60; // RRF constant
-    const identifierCache = new Map<string, ReturnType<typeof extractIdentifiers>>();
 
     const weights = config.search.hybrid;
     const wVector = weights.weight_vector ?? 0.4;
@@ -1244,12 +1246,11 @@ export class BeaconDatabase {
         rrfScore += wBm25 * (1 / (k + result.ranks.bm25));
       }
 
-      // Calculate identifier boost with caching (keyed by chunkText, not filePath,
-      // because two chunks from the same file have different identifiers)
-      let chunkIdentifiers = identifierCache.get(result.chunkText);
+      // Calculate identifier boost with persistent caching across searches
+      let chunkIdentifiers = this.identifierCache.get(result.chunkText);
       if (!chunkIdentifiers) {
         chunkIdentifiers = extractIdentifiers(result.chunkText);
-        identifierCache.set(result.chunkText, chunkIdentifiers);
+        this.identifierCache.set(result.chunkText, chunkIdentifiers);
       }
       const identifierMatches = Array.from(queryIdentifiers).filter((id) =>
         chunkIdentifiers!.has(id),
