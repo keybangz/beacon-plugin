@@ -216,28 +216,6 @@ describe('Index Coordinator', () => {
     });
   });
 
-  describe('garbageCollect', () => {
-    it('should delete files no longer in repository', async () => {
-      (getRepoFiles as any).mockImplementation(() => ['file1.ts', 'file2.ts']);
-      (mockDb.getIndexedFiles as any).mockImplementation(() => ['file1.ts', 'file2.ts', 'deleted.ts']);
-      (mockDb.deleteChunks as any).mockImplementation(() => Promise.resolve(undefined));
-
-      const result = await coordinator.garbageCollect();
-      
-      expect(result).toBe(1);
-      expect(mockDb.deleteChunks).toHaveBeenCalledWith('deleted.ts');
-    });
-
-    it('should return 0 when no files need deletion', async () => {
-      (getRepoFiles as any).mockImplementation(() => ['file1.ts', 'file2.ts']);
-      (mockDb.getIndexedFiles as any).mockImplementation(() => ['file1.ts', 'file2.ts']);
-
-      const result = await coordinator.garbageCollect();
-      
-      expect(result).toBe(0);
-    });
-  });
-
   describe('termination', () => {
     it('should check termination status', () => {
       (mockDb.getSyncState as any).mockImplementation(() => 'in_progress');

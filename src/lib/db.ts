@@ -543,6 +543,8 @@ export class BeaconDatabase {
         // This is acceptable - search will still work via FTS
       }
     }
+
+    this.clearCache();
   }
 
   /**
@@ -645,6 +647,8 @@ export class BeaconDatabase {
         log.error("beacon", "Batch HNSW indexing failed", { error: error instanceof Error ? error.message : String(error) });
       });
     }
+
+    this.clearCache();
   }
 
   /**
@@ -676,6 +680,8 @@ export class BeaconDatabase {
     });
 
     transaction();
+
+    this.clearCache();
   }
 
   /**
@@ -906,23 +912,53 @@ export class BeaconDatabase {
   /**
    * Hydrate chunkText for search results from SQLite.
    * Used after HNSW search since HNSW entries no longer store chunk text.
+   * Fixed N+1 query problem by batching all lookups into a single query.
    */
   private hydrateChunkText(results: SearchResult[]): SearchResult[] {
     if (results.length === 0) return results;
-    
-    const stmt = this.db.prepare(
-      "SELECT chunk_text FROM chunks WHERE file_path = ? AND start_line = ? LIMIT 1"
-    );
-    
-    for (const result of results) {
-      if (!result.chunkText) {
-        const row = stmt.get(result.filePath, result.startLine) as { chunk_text: string } | undefined;
-        if (row) {
-          result.chunkText = row.chunk_text;
-        }
+
+    const missingChunks = results
+      .map((r, i) => ({ result: r, index: i, filePath: r.filePath, startLine: r.startLine }))
+      .filter((r) => !r.result.chunkText);
+
+    if (missingChunks.length === 0) return results;
+
+    if (missingChunks.length === 1) {
+      const row = this.db.prepare(
+        "SELECT chunk_text FROM chunks WHERE file_path = ? AND start_line = ? LIMIT 1"
+      ).get(missingChunks[0].filePath, missingChunks[0].startLine) as { chunk_text: string } | undefined;
+      if (row) {
+        missingChunks[0].result.chunkText = row.chunk_text;
+      }
+      return results;
+    }
+
+    const placeholders = missingChunks.map(() => "(?, ?)").join(",");
+    const params: unknown[] = [];
+    for (const chunk of missingChunks) {
+      params.push(chunk.filePath, chunk.startLine);
+    }
+
+    const rows = this.db.prepare(
+      `SELECT file_path, start_line, chunk_text FROM chunks WHERE (file_path, start_line) IN (VALUES ${placeholders})`
+    ).all(...(params as import("bun:sqlite").SQLQueryBindings[])) as Array<{
+      file_path: string;
+      start_line: number;
+      chunk_text: string;
+    }>;
+
+    const chunkTextMap = new Map<string, string>();
+    for (const row of rows) {
+      chunkTextMap.set(`${row.file_path}:${row.start_line}`, row.chunk_text);
+    }
+
+    for (const chunk of missingChunks) {
+      const text = chunkTextMap.get(`${chunk.filePath}:${chunk.startLine}`);
+      if (text) {
+        chunk.result.chunkText = text;
       }
     }
-    
+
     return results;
   }
 

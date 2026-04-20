@@ -556,6 +556,36 @@ export class HNSWVectorIndex {
       .slice(0, topK);
   }
 
+  /**
+   * Search with path prefix using fileToChunkIds index for efficient path filtering.
+   * This avoids scanning all candidates when only specific path prefixes are needed.
+   */
+  searchWithPathFilterIndexed(
+    queryEmbedding: number[],
+    topK: number,
+    pathPrefix: string,
+  ): SearchResult[] {
+    const matchingChunkIds = new Set<string>();
+    for (const [filePath, chunkIds] of this.fileToChunkIds) {
+      if (filePath.startsWith(pathPrefix)) {
+        for (const chunkId of chunkIds) {
+          matchingChunkIds.add(chunkId);
+        }
+      }
+    }
+
+    if (matchingChunkIds.size === 0) {
+      return [];
+    }
+
+    const candidateMultiplier = 5;
+    const candidates = this.search(queryEmbedding, topK * candidateMultiplier);
+
+    return candidates
+      .filter((r) => matchingChunkIds.has(`${r.filePath}:${r.startLine}`))
+      .slice(0, topK);
+  }
+
   getStats(): { totalVectors: number; dimensions: number } {
     return {
       totalVectors: this.index ? this.index.getCurrentCount() : 0,

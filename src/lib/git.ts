@@ -5,7 +5,7 @@ import { log } from "./logger.js";
 import type { ModifiedFile } from "./types.js";
 
 const repoFilesCache = new Map<string, { files: string[]; timestamp: number }>();
-const CACHE_TTL = 5000;
+const CACHE_TTL = 30000;
 
 export function getRepoFiles(repoRoot: string): string[] {
     const cached = repoFilesCache.get(repoRoot);

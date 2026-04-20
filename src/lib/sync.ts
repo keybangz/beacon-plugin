@@ -699,38 +699,6 @@ export class IndexCoordinator {
       return false;
     }
   }
-
-  async garbageCollect(): Promise<number> {
-    try {
-      let allTrackedFilesArr = getAllFilesViaGlob(
-        this.repoRoot,
-        this.config.indexing.include,
-        this.config.indexing.exclude
-      );
-      if ((!allTrackedFilesArr || allTrackedFilesArr.length === 0) && (this.config.indexing as any).use_git_backup !== false) {
-        try {
-          allTrackedFilesArr = getRepoFiles(this.repoRoot);
-        } catch (e) {
-          throw new Error('[Beacon] GarbageCollect: No files found via glob or git backup.');
-        }
-      }
-      if (!allTrackedFilesArr || allTrackedFilesArr.length === 0) {
-        throw new Error('[Beacon] GarbageCollect: No files found via glob or git.');
-      }
-      const allTrackedFiles = new Set(allTrackedFilesArr);
-      const indexedFiles = this.db.getIndexedFiles();
-
-      const orphans = indexedFiles.filter((f) => !allTrackedFiles.has(f));
-
-      // Parallelize deletion of orphaned file chunks
-      await Promise.all(orphans.map((f) => this.db.deleteChunks(f)));
-
-      return orphans.length;
-    } catch (error: unknown) {
-      log.error("beacon", "Garbage collection failed", { error: error instanceof Error ? error.message : String(error) });
-      return 0;
-    }
-  }
 }
 
 export function initializeIndexing(

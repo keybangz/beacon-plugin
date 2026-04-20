@@ -47,7 +47,9 @@ export class LRUCache<T> {
   }
 
   set(key: string, value: T): void {
-    if (this.cache.has(key)) {
+    const isUpdate = this.cache.has(key);
+
+    if (isUpdate) {
       this.cache.delete(key);
     } else {
       this.stats.size++;

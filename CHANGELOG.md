@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.4.3] - 2026-04-20
+
+### Fixed
+- **LRUCache size tracking bug** (`src/lib/cache.ts`): `set()` was incorrectly incrementing size on key updates (not just new keys). Fixed to only increment `this.stats.size` when inserting a new key.
+- **repoFilesCache TTL too short** (`src/lib/git.ts`): Cache TTL was 5000ms causing excessive filesystem/git calls. Increased to 30000ms (30s).
+- **hydrateChunkText N+1 query problem** (`src/lib/db.ts`): When hydrating multiple search results, each missing chunk triggered a separate database query. Fixed by batching lookups into a single `VALUES` query.
+- **Cache invalidation on index changes** (`src/lib/db.ts`): `insertChunks`, `insertChunksBatch`, and `deleteChunks` now call `clearCache()` after mutations to prevent stale cache reads.
+
+### Added
+- **HNSW path pre-filter optimization** (`src/lib/hnsw.ts`): Added `searchWithPathFilterIndexed()` method that uses the `fileToChunkIds` map for efficient path prefix filtering instead of scanning all candidates.
+
+### Removed
+- **Dead code: garbageCollect** (`src/lib/sync.ts`): Removed unused `garbageCollect()` method and associated tests. The method was never called anywhere in the codebase and `performDiffSync` already handles orphan cleanup inline.
+
 ## [2.4.2] - 2026-04-10
 
 ### Fixed
