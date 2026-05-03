@@ -3,7 +3,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { fileURLToPath } from "url";
-import { initLogger } from "./src/lib/logger.js";
+import { initLogger, log } from "./src/lib/logger.js";
 import SearchTool from "./src/tools/search.js";
 import IndexTool from "./src/tools/index.js";
 import ReindexTool from "./src/tools/reindex.js";
@@ -304,6 +304,17 @@ class InitMutex {
       this.locked = false;
     }
   }
+}
+
+// Track files that failed to index for observability
+const failedIndexFiles = new Set<string>();
+
+export function getFailedIndexFiles(): string[] {
+  return Array.from(failedIndexFiles).slice(0, 10);
+}
+
+export function clearFailedIndexFiles(): void {
+  failedIndexFiles.clear();
 }
 
 const DEFAULT_BEACONIGNORE = `# Beacon ignore file
@@ -737,15 +748,46 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
         // Non-fatal: watch might fail on some filesystems
       }
 
+      // Watch for beacon.json changes and invalidate config cache
+      const beaconConfigPath = path.join(repoRoot, ".opencode", "beacon.json");
+      let beaconConfigWatcher: ReturnType<typeof fs.watch> | null = null;
+      try {
+        beaconConfigWatcher = fs.watch(beaconConfigPath, (eventType) => {
+          if (eventType === "change" && repoRoot) {
+            invalidateConfigCache(repoRoot);
+          }
+        });
+      } catch {
+        // Non-fatal: watch might fail if file doesn't exist or filesystem doesn't support it
+      }
+
       fileWatcher.on("batch", async (eventType: "add" | "change" | "unlink", filePaths: string[]) => {
         let pooled;
         try {
           pooled = await getCoordinator(worktree);
           if (eventType === "add" || eventType === "change") {
             // Process in parallel (each reembedFile is independent)
-            await Promise.allSettled(
-              filePaths.map((filePath) => pooled!.coordinator.reembedFile(filePath))
+            const results = await Promise.allSettled(
+              filePaths.map(async (filePath) => {
+                const success = await pooled!.coordinator.reembedFile(filePath);
+                if (!success) {
+                  failedIndexFiles.add(filePath);
+                  log.warn("beacon", "Failed to reindex file", { file: filePath });
+                } else {
+                  failedIndexFiles.delete(filePath);
+                }
+                return success;
+              })
             );
+            // Log any rejected promises
+            results.forEach((result, index) => {
+              if (result.status === "rejected") {
+                const filePath = filePaths[index];
+                const errorMsg = result.reason instanceof Error ? result.reason.message : String(result.reason);
+                failedIndexFiles.add(filePath);
+                log.warn("beacon", "Failed to reindex file", { file: filePath, error: errorMsg });
+              }
+            });
           } else if (eventType === "unlink") {
             await Promise.allSettled(
               filePaths.map((filePath) => pooled!.db.deleteChunks(filePath))

@@ -106,11 +106,16 @@ export class CrossEncoderReranker {
       throw new Error("Reranker not initialized");
     }
 
-    const scores: number[] = [];
+    const CONCURRENCY = 4;
+    const scores: number[] = new Array(documents.length).fill(0);
 
-    for (const doc of documents) {
-      const score = await this.scorePair(query, doc);
-      scores.push(score);
+    // Process in parallel batches of CONCURRENCY
+    for (let i = 0; i < documents.length; i += CONCURRENCY) {
+      const batch = documents.slice(i, i + CONCURRENCY);
+      const batchScores = await Promise.all(
+        batch.map((doc) => this.scorePair(query, doc))
+      );
+      batchScores.forEach((score, j) => { scores[i + j] = score; });
     }
 
     const results = scores

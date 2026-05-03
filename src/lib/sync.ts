@@ -367,8 +367,10 @@ export class IndexCoordinator {
           );
           
           filesProcessed++;
-          // Update DB progress counter every 10 files to avoid one DB write per file.
-          if (filesProcessed % 10 === 0 || filesProcessed === totalFilePaths) {
+          // Update DB progress counter every 100 files or 5% of total (whichever is larger)
+          // to reduce SQLite write overhead.
+          const updateInterval = Math.max(100, Math.floor(totalFilePaths * 0.05));
+          if (filesProcessed % updateInterval === 0 || filesProcessed === totalFilePaths) {
             this.db.setSyncState("files_indexed", String(filesProcessed));
           }
 

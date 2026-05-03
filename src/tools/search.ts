@@ -10,6 +10,10 @@ import { getCoordinator, releaseCoordinator } from "../lib/pool.js";
 
 const searchCache = new SearchCache(200, 300_000);
 const heuristicReranker = createHeuristicReranker();
+
+export function clearSearchCache(): void {
+  searchCache.clear();
+}
 const DECLARATION_RE = /^\s*(?:export\s+)?(?:async\s+)?(?:function|class|interface|type|enum)\s+[a-zA-Z_$][\w$]*/;
 
 function buildPreview(chunkText: string): string {

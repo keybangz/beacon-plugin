@@ -5,6 +5,8 @@ import { openDatabase } from "../lib/db.js";
 import { Embedder } from "../lib/embedder.js";
 import { IndexCoordinator, type IndexProgress } from "../lib/sync.js";
 import { connectionPool } from "../lib/pool.js";
+import { clearSearchCache } from "./search.js";
+import { clearFailedIndexFiles } from "../../beacon.js";
 import { join } from "path";
 import { mkdirSync, existsSync, unlinkSync } from "fs";
 
@@ -75,6 +77,9 @@ const _export: ToolDefinition = tool({
         mkdirSync(storagePath, { recursive: true });
       }
 
+      // Clear failed index files tracking at start of reindex
+      clearFailedIndexFiles();
+
       const dbPath = join(storagePath, "embeddings.db");
 
       // Close any pooled connection for this repo before deleting DB files to
@@ -125,6 +130,9 @@ const _export: ToolDefinition = tool({
           const result = await coordinator.performFullIndex(onProgress);
           const endTime = Date.now();
           const durationSeconds = ((endTime - startTime) / 1000).toFixed(2);
+
+          // Clear search cache after successful reindex to avoid stale results
+          clearSearchCache();
 
           const stats = db.getStats();
           const syncProgress = db.getSyncProgress();

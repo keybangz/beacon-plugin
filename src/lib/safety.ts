@@ -6,6 +6,20 @@ import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { getBeaconRoot } from "./repo-root.js";
 
+interface BlacklistCache {
+  data: string[];
+  expiresAt: number;
+}
+
+let blacklistCache: BlacklistCache | null = null;
+let whitelistCache: BlacklistCache | null = null;
+const BLACKLIST_CACHE_TTL_MS = 60_000;
+
+export function invalidateBlacklistCache(): void {
+  blacklistCache = null;
+  whitelistCache = null;
+}
+
 /**
  * Default blacklist paths (sensitive directories / files).
  * Matching is substring-based: a path is blocked if it CONTAINS any of these strings.
@@ -94,21 +108,33 @@ const DEFAULT_BLACKLIST = [
  * @throws Error if blacklist file exists but cannot be read/parsed
  */
 function getBlacklist(): string[] {
+    const now = Date.now();
+    if (blacklistCache && now < blacklistCache.expiresAt) {
+        return blacklistCache.data;
+    }
+
     const repoRoot = getBeaconRoot();
     const blacklistPath = join(repoRoot, ".opencode", "blacklist.json");
+    let result: string[];
     if (existsSync(blacklistPath)) {
         const content = readFileSync(blacklistPath, "utf-8");
         const data = JSON.parse(content);
         // blacklist.json is written as a plain JSON array by the blacklist tool.
         // Accept both a flat array (current format) and the legacy { paths: [...] } shape.
         if (Array.isArray(data)) {
-            return [...DEFAULT_BLACKLIST, ...data];
+            result = [...DEFAULT_BLACKLIST, ...data];
         }
         else if (data && Array.isArray(data.paths)) {
-            return [...DEFAULT_BLACKLIST, ...data.paths];
+            result = [...DEFAULT_BLACKLIST, ...data.paths];
+        } else {
+            result = DEFAULT_BLACKLIST;
         }
+    } else {
+        result = DEFAULT_BLACKLIST;
     }
-    return DEFAULT_BLACKLIST;
+
+    blacklistCache = { data: result, expiresAt: now + BLACKLIST_CACHE_TTL_MS };
+    return result;
 }
 
 /**
@@ -118,6 +144,11 @@ function getBlacklist(): string[] {
  * @returns Array of whitelisted path substrings
  */
 function getWhitelist(repoRoot?: string): string[] {
+    const now = Date.now();
+    if (whitelistCache && now < whitelistCache.expiresAt) {
+        return whitelistCache.data;
+    }
+
     try {
         const safeRoot = repoRoot || getBeaconRoot();
         const whitelistPath = join(safeRoot, ".opencode", "whitelist.json");
@@ -125,6 +156,7 @@ function getWhitelist(repoRoot?: string): string[] {
             const content = readFileSync(whitelistPath, "utf-8");
             const data = JSON.parse(content);
             if (Array.isArray(data)) {
+                whitelistCache = { data, expiresAt: now + BLACKLIST_CACHE_TTL_MS };
                 return data;
             }
         }
@@ -132,6 +164,8 @@ function getWhitelist(repoRoot?: string): string[] {
     catch {
         // Silently fail, no whitelist entries
     }
+
+    whitelistCache = { data: [], expiresAt: now + BLACKLIST_CACHE_TTL_MS };
     return [];
 }
 

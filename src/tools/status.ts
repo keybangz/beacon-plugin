@@ -4,6 +4,7 @@ import { loadConfig } from "../lib/config.js";
 import { openDatabase } from "../lib/db.js";
 import { Embedder } from "../lib/embedder.js";
 import { connectionPool } from "../lib/pool.js";
+import { getFailedIndexFiles } from "../../beacon.js";
 import { join } from "path";
 import { existsSync } from "fs";
 
@@ -53,6 +54,8 @@ export default tool({
         // Merge in-memory flag with DB state for the most accurate picture.
         const effectivelyRunning = indexerRunning || syncProgress.sync_status === "in_progress";
 
+        const failedFiles = getFailedIndexFiles();
+
         return JSON.stringify({
           status: "ok",
           indexer_running: effectivelyRunning,
@@ -67,6 +70,10 @@ export default tool({
           embedding_endpoint: config.embedding.api_base,
           database_path: config.storage.path,
           model_downloaded: modelDownloaded,
+          failed_files: {
+            count: failedFiles.length,
+            files: failedFiles,
+          },
           ...(modelDownloaded === false && {
             model_warning: `Model '${config.embedding.model}' is not downloaded. Run the 'downloadModels' tool with model='${config.embedding.model}' to enable vector search. Current searches fall back to BM25-only.`,
           }),
