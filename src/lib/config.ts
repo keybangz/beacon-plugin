@@ -113,8 +113,11 @@ export function parseBeaconIgnore(repoRoot: string): string[] {
 const DEFAULT_CONFIG = {
     embedding: {
         api_base: "local",
-        model: "all-MiniLM-L6-v2",
-        dimensions: 384,
+        // jina-embeddings-v2-base-code: int8-quantized, 768 dims, 8192-token context.
+        // Trained on GitHub code across 30 programming languages. Best quality/size
+        // tradeoff for code search. ~162MB download via the download-model tool.
+        model: "jina-embeddings-v2-base-code",
+        dimensions: 768,
         batch_size: 32,
         context_limit: 512,
         query_prefix: "",

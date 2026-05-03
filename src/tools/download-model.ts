@@ -121,11 +121,17 @@ async function downloadFile(url: string, destPath: string): Promise<void> {
 }
 
 const _export: ToolDefinition = tool({
-  description: "Download an ONNX embedding model for local use. Available models: all-MiniLM-L6-v2 (default, 384 dims, ~90MB), all-MiniLM-L12-v2 (384 dims, ~134MB), paraphrase-MiniLM-L6-v2 (384 dims, ~90MB), codebert-base (768 dims, ~480MB), unixcoder-base (768 dims, ~470MB), jina-embeddings-v2-base-code (768 dims, ~162MB, best for code), nomic-embed-text-v1.5 (768 dims, ~137MB, requires query_prefix and document_prefix)",
+  description: "Download an ONNX embedding model for local use. " +
+    "Recommended: jina-embeddings-v2-base-code (768 dims, ~162MB, best for code — 30 programming languages, 8192-token context). " +
+    "Available models: all-MiniLM-L6-v2 (384 dims, ~90MB, fast general-purpose), " +
+    "all-MiniLM-L12-v2 (384 dims, ~134MB), paraphrase-MiniLM-L6-v2 (384 dims, ~90MB), " +
+    "codebert-base (768 dims, ~480MB), unixcoder-base (768 dims, ~470MB), " +
+    "jina-embeddings-v2-base-code (768 dims, ~162MB, best for code), " +
+    "nomic-embed-text-v1.5 (768 dims, ~137MB, requires query_prefix and document_prefix)",
   args: {
-    model: tool.schema.string().optional().describe("Model name to download (default: all-MiniLM-L6-v2)"),
+    model: tool.schema.string().optional().describe("Model name to download (default: jina-embeddings-v2-base-code)"),
   },
-  async execute({ model = "all-MiniLM-L6-v2" }): Promise<string> {
+  async execute({ model = "jina-embeddings-v2-base-code" }): Promise<string> {
     const modelInfo = MODELS[model];
 
     if (!modelInfo) {

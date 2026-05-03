@@ -67,12 +67,13 @@ const _export: ToolDefinition = tool({
   description:
     "View and modify Beacon configuration settings (embedding model, search weights, etc.). " +
     "Use scope='global' to set user-wide defaults (stored in ~/.config/beacon/config.json) " +
-    "or scope='project' (default) for per-project overrides (.opencode/beacon.json).",
+    "or scope='project' (default) for per-project overrides (.opencode/beacon.json). " +
+    "Use action='reset' to delete a broken or outdated config file and restore defaults.",
   args: {
     action: tool.schema
-      .enum(["view", "set"])
+      .enum(["view", "set", "reset"])
       .optional()
-      .describe("Action: 'view' to display config, 'set' to modify"),
+      .describe("Action: 'view' to display config, 'set' to modify a key, 'reset' to delete the config file and restore defaults"),
     key: tool.schema
       .string()
       .optional()
@@ -175,6 +176,40 @@ const _export: ToolDefinition = tool({
           key: args.key,
           old_value: oldValue,
           new_value: parsedValue,
+        });
+      } else if (args.action === "reset") {
+        // Determine which config file to reset
+        const { unlinkSync, existsSync: fsExistsSync } = await import("fs");
+        const resetPath = scope === "global" ? globalConfigPath : projectConfigPath;
+        const scopeLabel = scope === "global" ? "global" : "project";
+
+        if (!fsExistsSync(resetPath)) {
+          return JSON.stringify({
+            status: "success",
+            message: `No ${scopeLabel} config file found — already using defaults.`,
+            scope,
+            config_file: resetPath,
+          });
+        }
+
+        // Read the current config before deleting (for the diff in the response)
+        let previousConfig: Record<string, unknown> = {};
+        try {
+          previousConfig = JSON.parse(readFileSync(resetPath, "utf-8"));
+        } catch {
+          // If we can't read it, it's likely corrupt — still delete it
+        }
+
+        unlinkSync(resetPath);
+        invalidateConfigCache(repoRoot);
+
+        return JSON.stringify({
+          status: "success",
+          message: `${scopeLabel.charAt(0).toUpperCase() + scopeLabel.slice(1)} config reset to defaults. The file has been deleted.`,
+          scope,
+          config_file: resetPath,
+          previous_config: previousConfig,
+          note: "Run 'view' to see the active defaults now in effect.",
         });
       } else {
         // Default to view action
