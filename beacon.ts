@@ -782,10 +782,9 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
             // Log any rejected promises
             results.forEach((result, index) => {
               if (result.status === "rejected") {
-                const filePath = filePaths[index];
                 const errorMsg = result.reason instanceof Error ? result.reason.message : String(result.reason);
-                failedIndexFiles.add(filePath);
-                log.warn("beacon", "Failed to reindex file", { file: filePath, error: errorMsg });
+                failedIndexFiles.add(filePaths[index]);
+                log.warn("beacon", "Failed to reindex file", { file: filePaths[index], error: errorMsg });
               }
             });
           } else if (eventType === "unlink") {
