@@ -341,18 +341,23 @@ export class ONNXEmbedder {
       const allAttentionMasks: number[][] = [];
       let maxLen = 0;
 
+      // First pass: encode all texts and find maxLen
       for (const text of batchTexts) {
         const inputIds = this.tokenizer!.encode(text, true);
         const seqLength = Math.min(inputIds.length, this.config.maxTokens);
         const truncatedIds = inputIds.slice(0, seqLength);
-        const attentionMask = new Array(seqLength).fill(1);
-
         allInputIds.push(truncatedIds);
-        allAttentionMasks.push(attentionMask);
         maxLen = Math.max(maxLen, truncatedIds.length);
       }
 
       maxLen = Math.min(maxLen, this.config.maxTokens);
+
+      // Second pass: build proper attention masks with correct padding (1s for real tokens, 0s for padding)
+      for (const ids of allInputIds) {
+        const realTokenCount = ids.length;
+        const attentionMask = [...new Array(realTokenCount).fill(1), ...new Array(maxLen - realTokenCount).fill(0)];
+        allAttentionMasks.push(attentionMask);
+      }
 
       // P3: Yield after synchronous tokenization + BigInt tensor construction
       // and before dispatching to ONNX Runtime.  The tokenizer (BertTokenizer)

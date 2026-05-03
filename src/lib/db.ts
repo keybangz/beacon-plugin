@@ -28,7 +28,7 @@ import {
 import { SearchCache, PerformanceTimer } from "./cache.js";
 import { HNSWVectorIndex, type HNSWIndexConfig } from "./hnsw.js";
 
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5; // v5: fixed attention mask in meanPool — all existing embeddings are invalid and must be recomputed
 const CACHE_TTL_MS = 300000; // 5 minutes
 
 /**
