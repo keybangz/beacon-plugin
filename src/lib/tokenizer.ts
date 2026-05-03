@@ -206,13 +206,44 @@ export function rrfScore(vectorRank: number, bm25Rank: number, k = 60): number {
 }
 
 const FILE_TYPE_MULTIPLIERS: Record<string, number> = {
-  ts: 1.2, tsx: 1.2,
+  // TypeScript / JavaScript — highest boost (primary use case)
+  ts: 1.2, tsx: 1.2, mjs: 1.0, cjs: 1.0,
   js: 1.0, jsx: 1.0,
-  py: 1.1,
-  java: 1.0, go: 1.0, rs: 1.0, rb: 1.0, cs: 1.0, cpp: 1.0, c: 1.0,
-  json: 1.0, jsonc: 1.0, yaml: 0.9, yml: 0.9,
-  md: 0.9, mdx: 0.9,
-  sh: 0.9, bash: 0.9,
+  // Python
+  py: 1.1, pyi: 1.1,
+  // JVM languages
+  java: 1.0, kt: 1.1, kts: 1.1, scala: 1.0, groovy: 1.0,
+  // C# / .NET
+  cs: 1.1, fs: 1.0, fsx: 1.0,
+  // C / C++
+  c: 1.0, cpp: 1.1, cc: 1.1, cxx: 1.1, h: 0.9, hpp: 0.9, hxx: 0.9,
+  // Go / Rust
+  go: 1.0, rs: 1.1,
+  // Web / Frontend
+  vue: 1.1, svelte: 1.1, astro: 1.0,
+  html: 0.8, htm: 0.8, css: 0.8, scss: 0.9, sass: 0.9, less: 0.9,
+  // Ruby / PHP
+  rb: 1.0, rake: 0.9, erb: 0.8,
+  php: 1.0, phtml: 0.8,
+  // Swift / Objective-C / Dart
+  swift: 1.1, m: 1.0, mm: 1.0, dart: 1.1,
+  // Elixir / Erlang
+  ex: 1.0, exs: 1.0, erl: 1.0, hrl: 0.9,
+  // Haskell / ML
+  hs: 1.0, lhs: 0.9, ml: 1.0, mli: 0.9,
+  // Lua / Shell
+  lua: 1.0,
+  sh: 0.9, bash: 0.9, zsh: 0.9, fish: 0.9, ps1: 0.9, psm1: 0.9,
+  // Config / Data
+  json: 0.9, jsonc: 0.9, yaml: 0.8, yml: 0.8, toml: 0.9, xml: 0.8,
+  // Docs
+  md: 0.8, mdx: 0.9, rst: 0.8, txt: 0.7,
+  // Infrastructure
+  tf: 0.9, hcl: 0.9,
+  // GraphQL / Proto
+  graphql: 1.0, gql: 1.0, prisma: 1.0, proto: 1.0,
+  // SQL
+  sql: 1.0,
 };
 
 export function getFileTypeMultiplier(filePath: string): number {

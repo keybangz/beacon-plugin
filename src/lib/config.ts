@@ -115,13 +115,13 @@ const DEFAULT_CONFIG = {
         api_base: "local",
         model: "all-MiniLM-L6-v2",
         dimensions: 384,
-        batch_size: 64,
-        context_limit: 256,
+        batch_size: 32,
+        context_limit: 512,
         query_prefix: "",
         document_prefix: "",
         api_key_env: "",
         enabled: true,
-        execution_provider: "webgpu"
+        execution_provider: "cpu"
     },
     chunking: {
         strategy: "hybrid",
@@ -130,18 +130,109 @@ const DEFAULT_CONFIG = {
     },
     indexing: {
         include: [
+            // TypeScript / JavaScript
             "**/*.ts",
             "**/*.tsx",
             "**/*.js",
             "**/*.jsx",
+            "**/*.mjs",
+            "**/*.cjs",
+            // Python
             "**/*.py",
+            "**/*.pyi",
+            // Go
             "**/*.go",
+            // Rust
             "**/*.rs",
+            // Java / JVM
             "**/*.java",
+            "**/*.kt",
+            "**/*.kts",
+            "**/*.scala",
+            "**/*.groovy",
+            // C# / .NET
+            "**/*.cs",
+            "**/*.fs",
+            "**/*.fsx",
+            // C / C++
+            "**/*.c",
+            "**/*.cpp",
+            "**/*.cc",
+            "**/*.cxx",
+            "**/*.h",
+            "**/*.hpp",
+            "**/*.hxx",
+            // Web / Frontend
+            "**/*.vue",
+            "**/*.svelte",
+            "**/*.astro",
+            "**/*.html",
+            "**/*.htm",
+            "**/*.css",
+            "**/*.scss",
+            "**/*.sass",
+            "**/*.less",
+            // Ruby
             "**/*.rb",
+            "**/*.rake",
+            "**/*.erb",
+            // PHP
             "**/*.php",
+            "**/*.phtml",
+            // Swift / Objective-C
+            "**/*.swift",
+            "**/*.m",
+            "**/*.mm",
+            // Dart / Flutter
+            "**/*.dart",
+            // Elixir / Erlang
+            "**/*.ex",
+            "**/*.exs",
+            "**/*.erl",
+            "**/*.hrl",
+            // Haskell / F# / OCaml
+            "**/*.hs",
+            "**/*.lhs",
+            "**/*.ml",
+            "**/*.mli",
+            // Lua
+            "**/*.lua",
+            // Shell / Scripts
+            "**/*.sh",
+            "**/*.bash",
+            "**/*.zsh",
+            "**/*.fish",
+            "**/*.ps1",
+            "**/*.psm1",
+            // SQL
             "**/*.sql",
-            "**/*.md"
+            // Config / Data formats
+            "**/*.json",
+            "**/*.jsonc",
+            "**/*.yaml",
+            "**/*.yml",
+            "**/*.toml",
+            "**/*.xml",
+            // Documentation
+            "**/*.md",
+            "**/*.mdx",
+            "**/*.rst",
+            "**/*.txt",
+            // Infrastructure
+            "**/*.tf",
+            "**/*.hcl",
+            "**/*.dockerfile",
+            "**/Dockerfile",
+            "**/Makefile",
+            "**/*.mk",
+            "**/*.cmake",
+            "**/CMakeLists.txt",
+            // GraphQL / Prisma
+            "**/*.graphql",
+            "**/*.gql",
+            "**/*.prisma",
+            // Proto
+            "**/*.proto",
         ],
         exclude: [
             // Version control
@@ -279,6 +370,57 @@ const DEFAULT_CONFIG = {
             "*.tfstate.backup",
             // OpenCode own storage (never index our own data)
             ".opencode/**",
+            // C# / .NET build artifacts
+            "*.dll",
+            "*.exe",
+            "*.pdb",
+            "*.nupkg",
+            "packages/**",   // NuGet packages
+            // C / C++ build artifacts
+            "*.o",
+            "*.a",
+            "*.so",
+            "*.dylib",
+            "CMakeFiles/**",
+            "cmake-build-*/**",
+            // Swift / Xcode
+            "*.xcodeproj/**",
+            "*.xcworkspace/**",
+            "DerivedData/**",
+            "Pods/**",           // CocoaPods
+            ".build/**",         // Swift Package Manager
+            // Kotlin / Android
+            "*.apk",
+            "*.aab",
+            "*.dex",
+            // Dart / Flutter
+            ".dart_tool/**",
+            ".flutter-plugins",
+            ".flutter-plugins-dependencies",
+            // Ruby
+            ".bundle/**",
+            // PHP
+            "*.phar",
+            // Elixir
+            "_build/**",
+            ".elixir_ls/**",
+            "deps/**",           // Mix dependencies
+            // Haskell
+            ".stack-work/**",
+            "dist-newstyle/**",
+            // Rust additional
+            "**/.cargo/registry/**",
+            // Go additional
+            "**/.gopath/**",
+            // Generated / compiled assets
+            "*.pyc",
+            "*.pyo",
+            "*.beam",            // Erlang/Elixir compiled
+            "*.hi",              // Haskell interface files
+            // Misc
+            "storybook-static/**",
+            ".storybook/public/**",
+            "__snapshots__/**",  // Jest snapshots (usually auto-generated)
         ],
         max_file_size_kb: 500,
         auto_index: true,
@@ -308,6 +450,12 @@ const DEFAULT_CONFIG = {
  * @param target - Base configuration object
  * @param source - Override configuration object
  * @returns Merged configuration
+ */
+/**
+ * Top-level merge: deep-clones target via JSON round-trip, then delegates
+ * nested object merging to deepMergeObjects (which union-merges arrays).
+ * The JSON round-trip ensures the returned object is fully independent of
+ * the input references.
  */
 function deepMerge(target: any, source: any): any {
     const result = JSON.parse(JSON.stringify(target));

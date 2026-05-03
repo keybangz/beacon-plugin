@@ -32,40 +32,118 @@ const CLASS_PATTERNS = [
 const IMPORT_PATTERN = /^\s*(?:import|export)\s+/;
 const COMMENT_PATTERN = /^\s*(?:\/\/|\/\*|\*|<!--)/;
 
-function detectSemanticBoundaries(lines: string[]): SemanticBoundary[] {
+// Python: def and class at any indentation level
+const PYTHON_FUNCTION_PATTERN = /^\s*(?:async\s+)?def\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(/;
+const PYTHON_CLASS_PATTERN = /^\s*class\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*[:(]/;
+
+// Go: func declarations (including methods)
+const GO_FUNCTION_PATTERN = /^\s*func\s+(?:\([^)]+\)\s+)?([a-zA-Z_][a-zA-Z0-9_]*)\s*\(/;
+
+// Rust: fn, impl, trait, struct, enum
+const RUST_FUNCTION_PATTERN = /^\s*(?:pub(?:\([^)]+\))?\s+)?(?:async\s+)?fn\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*[<(]/;
+const RUST_ITEM_PATTERN = /^\s*(?:pub(?:\([^)]+\))?\s+)?(?:impl|trait|struct|enum|mod)\s+([a-zA-Z_][a-zA-Z0-9_]*)/;
+
+// C# / Java: class/interface/struct/enum declarations
+const CSHARP_CLASS_PATTERN = /^\s*(?:(?:public|private|protected|internal|static|abstract|sealed|partial)\s+)*(?:class|interface|struct|enum|record)\s+([a-zA-Z_][a-zA-Z0-9_]*)/;
+
+// C# / Java: method declarations (return type + name + open paren)
+// Matches: [modifiers] ReturnType MethodName(
+const CSHARP_METHOD_PATTERN = /^\s*(?:(?:public|private|protected|internal|static|virtual|override|abstract|async|new|sealed|partial|extern)\s+)+(?:[\w<>\[\]?]+\s+)+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(/;
+
+// C / C++: function definitions (return type + name + parens + brace)
+const C_FUNCTION_PATTERN = /^\s*(?:static\s+|inline\s+|extern\s+)?(?:const\s+)?\w[\w\s*]+\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\([^;]*\)\s*(?:const\s*)?\{?\s*$/;
+
+// Ruby: def and class
+const RUBY_FUNCTION_PATTERN = /^\s*def\s+(?:self\.)?([a-zA-Z_][a-zA-Z0-9_?!]*)/;
+const RUBY_CLASS_PATTERN = /^\s*(?:class|module)\s+([A-Z][a-zA-Z0-9_]*)/;
+
+// PHP: function and class
+const PHP_FUNCTION_PATTERN = /^\s*(?:public|private|protected|static|abstract|\s)*function\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(/;
+const PHP_CLASS_PATTERN = /^\s*(?:abstract\s+|final\s+)?(?:class|interface|trait|enum)\s+([a-zA-Z_][a-zA-Z0-9_]*)/;
+
+// Swift: func, class, struct, protocol, extension
+const SWIFT_FUNCTION_PATTERN = /^\s*(?:public|private|internal|fileprivate|open|\s)*(?:override\s+)?(?:static\s+|class\s+)?func\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*[<(]/;
+const SWIFT_TYPE_PATTERN = /^\s*(?:public|private|internal|fileprivate|open|\s)*(?:class|struct|enum|protocol|extension|actor)\s+([a-zA-Z_][a-zA-Z0-9_]*)/;
+
+// Kotlin: fun, class, object, interface
+const KOTLIN_FUNCTION_PATTERN = /^\s*(?:public|private|protected|internal|override|suspend|\s)*fun\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*[<(]/;
+const KOTLIN_CLASS_PATTERN = /^\s*(?:public|private|protected|internal|abstract|sealed|data|open|\s)*(?:class|interface|object|enum\s+class)\s+([a-zA-Z_][a-zA-Z0-9_]*)/;
+
+function detectSemanticBoundaries(lines: string[], filePath?: string): SemanticBoundary[] {
   const boundaries: SemanticBoundary[] = [];
-  
+  const ext = filePath ? (filePath.split(".").pop()?.toLowerCase() ?? "") : "";
+
+  // Determine which pattern sets to use based on file extension
+  const isJsTs = ext === "ts" || ext === "tsx" || ext === "js" || ext === "jsx" || ext === "mjs" || ext === "cjs" || ext === "";
+
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    
-    for (const pattern of FUNCTION_PATTERNS) {
-      const match = line.match(pattern);
-      if (match) {
-        boundaries.push({ line: i, type: "function", name: match[1] });
-        break;
+    let matched = false;
+
+    if (ext === "py") {
+      let m = line.match(PYTHON_FUNCTION_PATTERN);
+      if (m) { boundaries.push({ line: i, type: "function", name: m[1] }); matched = true; }
+      else { m = line.match(PYTHON_CLASS_PATTERN); if (m) { boundaries.push({ line: i, type: "class", name: m[1] }); matched = true; } }
+    } else if (ext === "go") {
+      const m = line.match(GO_FUNCTION_PATTERN);
+      if (m) { boundaries.push({ line: i, type: "function", name: m[1] }); matched = true; }
+    } else if (ext === "rs") {
+      let m = line.match(RUST_FUNCTION_PATTERN);
+      if (m) { boundaries.push({ line: i, type: "function", name: m[1] }); matched = true; }
+      else { m = line.match(RUST_ITEM_PATTERN); if (m) { boundaries.push({ line: i, type: "class", name: m[1] }); matched = true; } }
+    } else if (ext === "cs" || ext === "java") {
+      let m = line.match(CSHARP_CLASS_PATTERN);
+      if (m) { boundaries.push({ line: i, type: "class", name: m[1] }); matched = true; }
+      else { m = line.match(CSHARP_METHOD_PATTERN); if (m) { boundaries.push({ line: i, type: "function", name: m[1] }); matched = true; } }
+    } else if (ext === "c" || ext === "cpp" || ext === "cc" || ext === "cxx") {
+      const m = line.match(C_FUNCTION_PATTERN);
+      if (m) { boundaries.push({ line: i, type: "function", name: m[1] }); matched = true; }
+    } else if (ext === "rb") {
+      let m = line.match(RUBY_FUNCTION_PATTERN);
+      if (m) { boundaries.push({ line: i, type: "function", name: m[1] }); matched = true; }
+      else { m = line.match(RUBY_CLASS_PATTERN); if (m) { boundaries.push({ line: i, type: "class", name: m[1] }); matched = true; } }
+    } else if (ext === "php") {
+      let m = line.match(PHP_FUNCTION_PATTERN);
+      if (m) { boundaries.push({ line: i, type: "function", name: m[1] }); matched = true; }
+      else { m = line.match(PHP_CLASS_PATTERN); if (m) { boundaries.push({ line: i, type: "class", name: m[1] }); matched = true; } }
+    } else if (ext === "swift") {
+      let m = line.match(SWIFT_FUNCTION_PATTERN);
+      if (m) { boundaries.push({ line: i, type: "function", name: m[1] }); matched = true; }
+      else { m = line.match(SWIFT_TYPE_PATTERN); if (m) { boundaries.push({ line: i, type: "class", name: m[1] }); matched = true; } }
+    } else if (ext === "kt" || ext === "kts") {
+      let m = line.match(KOTLIN_FUNCTION_PATTERN);
+      if (m) { boundaries.push({ line: i, type: "function", name: m[1] }); matched = true; }
+      else { m = line.match(KOTLIN_CLASS_PATTERN); if (m) { boundaries.push({ line: i, type: "class", name: m[1] }); matched = true; } }
+    } else if (isJsTs) {
+      // JS/TS patterns as default for recognized JS/TS extensions and unknown extensions
+      for (const pattern of FUNCTION_PATTERNS) {
+        const m = line.match(pattern);
+        if (m) { boundaries.push({ line: i, type: "function", name: m[1] }); matched = true; break; }
+      }
+      if (!matched) {
+        for (const pattern of CLASS_PATTERNS) {
+          const m = line.match(pattern);
+          if (m) {
+            const type = line.includes("interface") ? "interface" :
+                         line.includes("class") ? "class" :
+                         line.includes("enum") ? "export" : "export";
+            boundaries.push({ line: i, type: type as any, name: m[1] });
+            matched = true;
+            break;
+          }
+        }
       }
     }
-    
-    for (const pattern of CLASS_PATTERNS) {
-      const match = line.match(pattern);
-      if (match) {
-        const type = line.includes("interface") ? "interface" : 
-                     line.includes("class") ? "class" : 
-                     line.includes("enum") ? "export" : "export";
-        boundaries.push({ line: i, type: type as any, name: match[1] });
-        break;
-      }
-    }
-    
-    if (IMPORT_PATTERN.test(line)) {
+
+    // Import and comment patterns apply to all languages
+    if (!matched && IMPORT_PATTERN.test(line)) {
       boundaries.push({ line: i, type: "import" });
     }
-    
     if (COMMENT_PATTERN.test(line)) {
       boundaries.push({ line: i, type: "comment" });
     }
   }
-  
+
   return boundaries;
 }
 
@@ -98,7 +176,8 @@ function estimateTokens(text: string): number {
   code: string,
   maxTokens: number = 512,
   overlapTokens: number = 50,
-  contextLimit?: number
+  contextLimit?: number,
+  filePath?: string
 ): ChunkResult[] {
   const effectiveMaxTokens = contextLimit !== undefined
     ? Math.min(maxTokens, Math.floor(contextLimit * 0.8))
@@ -107,19 +186,20 @@ function estimateTokens(text: string): number {
   const maxChars = effectiveMaxTokens * 3;
   const lines: string[] = code.split("\n");
   
-  const boundaries = detectSemanticBoundaries(lines);
+  const boundaries = detectSemanticBoundaries(lines, filePath);
   
   if (boundaries.length === 0) {
     return chunkByTokenLimit(lines, effectiveMaxTokens, overlapTokens, maxChars);
   }
   
-  return chunkBySemanticBoundaries(lines, boundaries, effectiveMaxTokens, maxChars);
+  return chunkBySemanticBoundaries(lines, boundaries, effectiveMaxTokens, overlapTokens, maxChars);
 }
 
 function chunkBySemanticBoundaries(
   lines: string[],
   boundaries: SemanticBoundary[],
   maxTokens: number,
+  overlapTokens: number,
   maxChars: number
 ): ChunkResult[] {
   const chunks: ChunkResult[] = [];
@@ -129,7 +209,7 @@ function chunkBySemanticBoundaries(
   );
   
   if (significantBoundaries.length === 0) {
-    return chunkByTokenLimit(lines, maxTokens, 50, maxChars);
+    return chunkByTokenLimit(lines, maxTokens, overlapTokens, maxChars);
   }
   
   let currentStart = 0;
@@ -150,7 +230,7 @@ function chunkBySemanticBoundaries(
     const chunkTokens = estimateTokens(chunkText);
     
     if (chunkTokens > maxTokens) {
-      const subChunks = chunkByTokenLimit(chunkLines, maxTokens, 50, maxChars);
+      const subChunks = chunkByTokenLimit(chunkLines, maxTokens, overlapTokens, maxChars);
       for (const sub of subChunks) {
         chunks.push({
           text: sub.text,
@@ -180,7 +260,7 @@ function chunkBySemanticBoundaries(
     if (remainingText.trim()) {
       const remainingTokens = estimateTokens(remainingText);
       if (remainingTokens > maxTokens) {
-        const subChunks = chunkByTokenLimit(remainingLines, maxTokens, 50, maxChars);
+        const subChunks = chunkByTokenLimit(remainingLines, maxTokens, overlapTokens, maxChars);
         for (const sub of subChunks) {
           chunks.push({
             text: sub.text,
