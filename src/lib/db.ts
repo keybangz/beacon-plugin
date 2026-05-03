@@ -429,9 +429,40 @@ export class BeaconDatabase {
         stored: storedDims,
         current: this.dimensions,
       };
-    } catch {
-      return { ok: true, stored: this.dimensions, current: this.dimensions };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err), stored: 0, current: this.dimensions };
     }
+  }
+
+  /**
+   * Get all chunk IDs from the database
+   * Used for garbage collection of orphaned HNSW entries
+   * Returns chunk IDs in the format `${filePath}:${chunkIndex}`
+   */
+  getAllChunkIds(): string[] {
+    const rows = this.db
+      .prepare("SELECT file_path, chunk_index FROM chunks")
+      .all() as Array<{ file_path: string; chunk_index: number }>;
+    return rows.map((r) => `${r.file_path}:${r.chunk_index}`);
+  }
+
+  /**
+   * Garbage collect orphaned HNSW entries
+   * Removes HNSW entries for chunk IDs not present in the valid set
+   */
+  async hnswGarbageCollect(validIds: Set<string>): Promise<void> {
+    if (!this.hnswIndex) return;
+
+    // Await HNSW initialization before accessing the index
+    if (this.hnswInitPromise) {
+      await this.hnswInitPromise;
+      this.hnswInitPromise = null;
+    }
+
+    if (!this.hnswIndex) return;
+
+    // Mark deleted any HNSW entries not in the valid set
+    await this.hnswIndex.garbageCollect(validIds);
   }
 
   /**

@@ -91,26 +91,22 @@ const DEFAULT_BLACKLIST = [
 /**
  * Get current working directory blacklist
  * @returns Array of blacklisted paths
+ * @throws Error if blacklist file exists but cannot be read/parsed
  */
 function getBlacklist(): string[] {
-    try {
-        const repoRoot = getBeaconRoot();
-        const blacklistPath = join(repoRoot, ".opencode", "blacklist.json");
-        if (existsSync(blacklistPath)) {
-            const content = readFileSync(blacklistPath, "utf-8");
-            const data = JSON.parse(content);
-            // blacklist.json is written as a plain JSON array by the blacklist tool.
-            // Accept both a flat array (current format) and the legacy { paths: [...] } shape.
-            if (Array.isArray(data)) {
-                return [...DEFAULT_BLACKLIST, ...data];
-            }
-            else if (data && Array.isArray(data.paths)) {
-                return [...DEFAULT_BLACKLIST, ...data.paths];
-            }
+    const repoRoot = getBeaconRoot();
+    const blacklistPath = join(repoRoot, ".opencode", "blacklist.json");
+    if (existsSync(blacklistPath)) {
+        const content = readFileSync(blacklistPath, "utf-8");
+        const data = JSON.parse(content);
+        // blacklist.json is written as a plain JSON array by the blacklist tool.
+        // Accept both a flat array (current format) and the legacy { paths: [...] } shape.
+        if (Array.isArray(data)) {
+            return [...DEFAULT_BLACKLIST, ...data];
         }
-    }
-    catch {
-        // Silently fail, use defaults
+        else if (data && Array.isArray(data.paths)) {
+            return [...DEFAULT_BLACKLIST, ...data.paths];
+        }
     }
     return DEFAULT_BLACKLIST;
 }
@@ -150,6 +146,7 @@ export function isCwdBlacklisted() {
         return isPathBlacklisted(cwd);
     }
     catch {
+        // If blacklist can't be read, assume CWD is not blacklisted
         return false;
     }
 }
@@ -189,7 +186,8 @@ export function validatePathSafety(path: string): void {
     if (path.includes("..")) {
         throw new Error("Path traversal detected");
     }
-    // Check blacklist
+    // Check blacklist — let filesystem errors from getBlacklist() propagate
+    // (a missing/malformed blacklist.json should not silently pass all paths)
     if (isPathBlacklisted(path)) {
         throw new Error(`Path is blacklisted: ${path}`);
     }

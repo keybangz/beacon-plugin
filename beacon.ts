@@ -471,7 +471,7 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
     }
   }
 
-  async function performAutoIndex(sessionID?: string, forceReindex: boolean = false): Promise<void> {
+  async function performAutoIndex(sessionID?: string, forceReindex: boolean = false, isRetry: boolean = false): Promise<void> {
     if (!isInitialized || !config) return;
     if (!config.indexing.auto_index && !forceReindex) return;
 
@@ -595,7 +595,7 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
     }
   }
 
-  async function checkAndTriggerIndexing(sessionID?: string): Promise<void> {
+  async function checkAndTriggerIndexing(sessionID?: string, isRetry: boolean = false): Promise<void> {
     if (!isInitialized || !config) return;
     if (!config.indexing.auto_index) return;
 
@@ -604,11 +604,11 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
       pooled = await getCoordinator(worktree);
       const stats = pooled.db.getStats();
       
-      // If no index exists, trigger indexing
-      if (stats.total_chunks === 0) {
+      // If no index exists, trigger indexing (only once to prevent infinite recursion)
+      if (stats.total_chunks === 0 && !isRetry) {
         await releaseCoordinator(worktree);
         pooled = null;
-        await performAutoIndex(sessionID, true);
+        await performAutoIndex(sessionID, true, true); // isRetry=true prevents further recursion
       }
     } catch (error) {
       // Silent fail
@@ -855,7 +855,7 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
                   await releaseCoordinator(worktree);
                   pooled = null;
                   try {
-                    await performAutoIndex(sessionID);
+                    await performAutoIndex(sessionID, true, true); // isRetry=true prevents infinite recursion
                   } catch {
                     // Silent fail
                   }

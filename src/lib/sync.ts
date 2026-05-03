@@ -699,6 +699,16 @@ export class IndexCoordinator {
       return false;
     }
   }
+
+  async garbageCollect(): Promise<void> {
+    // Remove orphaned HNSW entries not present in SQLite chunks table
+    try {
+      const indexedChunkIds = new Set(this.db.getAllChunkIds());
+      await this.db.hnswGarbageCollect(indexedChunkIds);
+    } catch (err) {
+      log.warn("beacon", "garbageCollect failed", { error: err instanceof Error ? err.message : String(err) });
+    }
+  }
 }
 
 export function initializeIndexing(

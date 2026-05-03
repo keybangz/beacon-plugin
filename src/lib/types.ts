@@ -155,6 +155,7 @@ export interface DimensionCheck {
   ok: boolean;
   stored: number;
   current: number;
+  error?: string;
 }
 
 export interface SyncProgress {

@@ -580,6 +580,42 @@ export class HNSWVectorIndex {
     };
   }
 
+  async garbageCollect(validIds: Set<string>): Promise<void> {
+    return this.mutex.runExclusive(async () => {
+      if (!this.index) return;
+
+      const toDelete: number[] = [];
+      for (const [id, internalId] of this.idToInternal) {
+        if (!validIds.has(id)) {
+          toDelete.push(internalId);
+        }
+      }
+
+      for (const internalId of toDelete) {
+        try {
+          this.index.markDelete(internalId);
+        } catch {
+          // Entry may already be deleted or invalid — ignore
+        }
+        const chunkId = this.internalToId.get(internalId);
+        if (chunkId) {
+          this.idToInternal.delete(chunkId);
+          this.internalToId.delete(internalId);
+          this.entries.delete(internalId);
+        }
+      }
+
+      if (toDelete.length > 0) {
+        this.isDirty = true;
+        try {
+          this.saveToDisk();
+        } catch (err) {
+          log.warn("beacon", "Failed to save index after garbage collection", { error: err instanceof Error ? err.message : String(err) });
+        }
+      }
+    });
+  }
+
   async clear(): Promise<void> {
     return this.mutex.runExclusive(async () => {
       if (this.index) {
