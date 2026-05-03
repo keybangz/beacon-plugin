@@ -148,6 +148,9 @@ export class IndexCoordinator {
         return { success: true, filesIndexed: 0 };
       }
 
+      // Retry any pending vectors from previous failed HNSW writes
+      await this.retryPendingVectors();
+
       // File discovery succeeded — safe to clear the existing index now.
       await this.db.clear();
       // Optimize DB for bulk writes during full reindex
@@ -257,8 +260,8 @@ export class IndexCoordinator {
       this.db.setSyncState("total_files", String(filesToIndex.length));
       this.db.setSyncState("files_indexed", "0");
 
-      // Parallelize deletion of old chunks for all modified files
-      await Promise.all(filesToIndex.map((file) => this.db.deleteChunks(file)));
+      // Batch delete old chunks for all modified files in a single transaction
+      this.db.deleteChunksBatch(filesToIndex);
 
       const filesIndexed = await this.indexFiles(filesToIndex);
 
@@ -280,9 +283,9 @@ export class IndexCoordinator {
       const allTrackedFiles = new Set(allTrackedFilesArr);
       const indexedFiles = new Set(this.db.getIndexedFiles());
 
-      // Parallelize deletion of orphaned files
+      // Batch delete orphaned files in a single transaction
       const orphans = Array.from(indexedFiles).filter((f) => !allTrackedFiles.has(f));
-      await Promise.all(orphans.map((f) => this.db.deleteChunks(f)));
+      this.db.deleteChunksBatch(orphans);
 
       this.db.setSyncState("last_full_sync", new Date().toISOString());
       // Record which model was used to build this index
@@ -701,12 +704,30 @@ export class IndexCoordinator {
   }
 
   async garbageCollect(): Promise<void> {
+    // Retry any pending vector insertions first
+    await this.retryPendingVectors();
+
     // Remove orphaned HNSW entries not present in SQLite chunks table
     try {
       const indexedChunkIds = new Set(this.db.getAllChunkIds());
       await this.db.hnswGarbageCollect(indexedChunkIds);
     } catch (err) {
       log.warn("beacon", "garbageCollect failed", { error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  /**
+   * Retry pending vector insertions that failed during initial indexing.
+   * Implements the outbox pattern for HNSW+SQLite dual-write consistency.
+   */
+  async retryPendingVectors(): Promise<void> {
+    try {
+      const retried = await this.db.retryPendingVectors();
+      if (retried > 0) {
+        log.info("beacon", `Retried ${retried} pending vector insertions`);
+      }
+    } catch (err) {
+      log.warn("beacon", "retryPendingVectors failed", { error: err instanceof Error ? err.message : String(err) });
     }
   }
 }

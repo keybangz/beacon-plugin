@@ -147,6 +147,7 @@ export class BeaconDatabase {
         file_hash TEXT NOT NULL,
         identifiers TEXT DEFAULT "",
         updated_at TEXT DEFAULT (datetime('now')),
+        vector_pending INTEGER DEFAULT 0,
         UNIQUE(file_path, chunk_index)
       )
     `);
@@ -250,6 +251,7 @@ export class BeaconDatabase {
     this.migrateToV2();
     this.migrateToV3();
     this.migrateToV4();
+    this.migrateToV5();
 
     // FTS statements prepared after migrateToV2() ensures chunks_fts exists.
     // On a fresh database chunks_fts does not exist until migrateToV2() runs,
@@ -394,6 +396,32 @@ export class BeaconDatabase {
     `);
 
     this.setSyncState("schema_version", "4");
+  }
+
+  /**
+   * Migrate to schema version 5 (add vector_pending column for HNSW outbox pattern)
+   */
+  private migrateToV5(): void {
+    const currentVersion = parseInt(
+      this.getSyncState("schema_version") ?? "1",
+      10,
+    );
+
+    if (currentVersion >= 5) {
+      return;
+    }
+
+    // Add vector_pending column if missing
+    const cols = this.db.prepare("PRAGMA table_info(chunks)").all() as Array<{
+      name: string;
+    }>;
+    const hasVectorPending = cols.some((c) => c.name === "vector_pending");
+
+    if (!hasVectorPending) {
+      this.db.exec('ALTER TABLE chunks ADD COLUMN vector_pending INTEGER DEFAULT 0');
+    }
+
+    this.setSyncState("schema_version", "5");
   }
 
   /**
@@ -572,8 +600,9 @@ export class BeaconDatabase {
         await this.hnswIndex.addVectorBatch(batchItems);
       } catch (error) {
         log.error("beacon", `HNSW indexing failed for ${filePath}`, { error: error instanceof Error ? error.message : String(error) });
-        // DB is already committed, but HNSW failed
-        // This is acceptable - search will still work via FTS
+        // DB is already committed, but HNSW failed - mark chunks for retry
+        const failedChunkIds = chunks.map((_, i) => `${filePath}:${i}`);
+        this.markVectorPending(failedChunkIds);
       }
     }
 
@@ -678,6 +707,9 @@ export class BeaconDatabase {
       );
       await this.hnswIndex.addVectorBatch(batchItems).catch((error) => {
         log.error("beacon", "Batch HNSW indexing failed", { error: error instanceof Error ? error.message : String(error) });
+        // Mark all chunks as pending for retry
+        const failedChunkIds = batchItems.map((item) => item.chunkId);
+        this.markVectorPending(failedChunkIds);
       });
     }
 
@@ -715,6 +747,161 @@ export class BeaconDatabase {
     transaction();
 
     this.clearCache();
+  }
+
+  /**
+   * Batch delete chunks for multiple files in a single transaction.
+   * Processes in batches of 500 to avoid locking the DB too long.
+   */
+  deleteChunksBatch(filePaths: string[]): void {
+    if (filePaths.length === 0) return;
+
+    const BATCH_SIZE = 500;
+
+    // For content-synced FTS5 tables, we must use the special 'delete' command
+    // with old column values rather than plain DELETE.
+    const transaction = this.db.transaction(() => {
+      for (let i = 0; i < filePaths.length; i += BATCH_SIZE) {
+        const batch = filePaths.slice(i, i + BATCH_SIZE);
+
+        // Get all chunks for this batch to properly delete from FTS
+        for (const filePath of batch) {
+          const rows = this.stmtSelectChunksForDelete.all(filePath) as Array<{
+            id: number;
+            file_path: string;
+            chunk_text: string;
+            identifiers: string;
+          }>;
+
+          if (rows.length > 0) {
+            for (const row of rows) {
+              this.stmtDeleteFtsEntry.run(row.id, row.file_path, row.chunk_text, row.identifiers);
+            }
+          }
+        }
+
+        // Delete chunks from main table
+        const placeholders = batch.map(() => '?').join(',');
+        this.db.run(`DELETE FROM chunks WHERE file_path IN (${placeholders})`, batch);
+      }
+    });
+
+    transaction();
+    this.clearCache();
+  }
+
+  /**
+   * Mark chunk IDs as having pending vector indexing (HNSW failed).
+   * Called when HNSW addVectorBatch fails to track chunks that need retry.
+   */
+  markVectorPending(chunkIds: string[]): void {
+    if (chunkIds.length === 0) return;
+
+    const stmt = this.db.prepare(
+      "UPDATE chunks SET vector_pending = 1 WHERE file_path = ? AND chunk_index = ?"
+    );
+
+    const transaction = this.db.transaction(() => {
+      for (const chunkId of chunkIds) {
+        const lastColon = chunkId.lastIndexOf(':');
+        if (lastColon === -1) continue;
+        const filePath = chunkId.slice(0, lastColon);
+        const chunkIndex = parseInt(chunkId.slice(lastColon + 1), 10);
+        if (isNaN(chunkIndex)) continue;
+        stmt.run(filePath, chunkIndex);
+      }
+    });
+
+    transaction();
+  }
+
+  /**
+   * Get all chunks with pending vector indexing.
+   * Returns chunk IDs, embeddings, and file paths for retry.
+   */
+  getPendingVectorChunks(): Array<{ chunkId: string; embedding: number[]; filePath: string }> {
+    const rows = this.db
+      .prepare("SELECT file_path, chunk_index, embedding FROM chunks WHERE vector_pending = 1")
+      .all() as Array<{ file_path: string; chunk_index: number; embedding: Buffer }>;
+
+    return rows.map((row) => {
+      const float32Array = new Float32Array(row.embedding.buffer, row.embedding.byteOffset, row.embedding.byteLength / 4);
+      return {
+        chunkId: `${row.file_path}:${row.chunk_index}`,
+        embedding: Array.from(float32Array),
+        filePath: row.file_path,
+      };
+    });
+  }
+
+  /**
+   * Clear the vector_pending flag for the given chunk IDs.
+   * Called after successful HNSW indexing.
+   */
+  clearVectorPending(chunkIds: string[]): void {
+    if (chunkIds.length === 0) return;
+
+    const stmt = this.db.prepare(
+      "UPDATE chunks SET vector_pending = 0 WHERE file_path = ? AND chunk_index = ?"
+    );
+
+    const transaction = this.db.transaction(() => {
+      for (const chunkId of chunkIds) {
+        const lastColon = chunkId.lastIndexOf(':');
+        if (lastColon === -1) continue;
+        const filePath = chunkId.slice(0, lastColon);
+        const chunkIndex = parseInt(chunkId.slice(lastColon + 1), 10);
+        if (isNaN(chunkIndex)) continue;
+        stmt.run(filePath, chunkIndex);
+      }
+    });
+
+    transaction();
+  }
+
+  /**
+   * Retry pending vector insertions in HNSW.
+   * Returns the number of chunks successfully indexed.
+   */
+  async retryPendingVectors(): Promise<number> {
+    if (!this.hnswIndex) return 0;
+
+    // Ensure HNSW is fully initialized
+    if (this.hnswInitPromise) {
+      await this.hnswInitPromise;
+      this.hnswInitPromise = null;
+    }
+
+    if (!this.hnswIndex) return 0;
+
+    const pending = this.getPendingVectorChunks();
+    if (pending.length === 0) return 0;
+
+    log.info("beacon", `Retrying ${pending.length} pending vector insertions`);
+
+    // Build batch items for HNSW
+    const batchItems = pending.map((item) => ({
+      chunkId: item.chunkId,
+      embedding: item.embedding,
+      entry: {
+        filePath: item.filePath,
+        startLine: 0, // Will be hydrated from DB if needed
+        endLine: 0,
+        chunkId: item.chunkId,
+      },
+    }));
+
+    try {
+      await this.hnswIndex.addVectorBatch(batchItems);
+      // Success - clear pending status
+      const chunkIds = pending.map((p) => p.chunkId);
+      this.clearVectorPending(chunkIds);
+      log.info("beacon", `Successfully retried ${chunkIds.length} pending vectors`);
+      return chunkIds.length;
+    } catch (error) {
+      log.error("beacon", "Failed to retry pending vectors", { error: error instanceof Error ? error.message : String(error) });
+      return 0;
+    }
   }
 
   /**

@@ -22,6 +22,7 @@ mock.module('../src/lib/db.js', () => ({
     setSyncState: mock(() => undefined),
     clear: mock(() => Promise.resolve(undefined)),
     deleteChunks: mock(() => Promise.resolve(undefined)),
+    deleteChunksBatch: mock(() => undefined),
     getIndexedFiles: mock(() => []),
     insertChunks: mock(() => Promise.resolve(undefined)),
     insertChunksBatch: mock(() => Promise.resolve(undefined)),
@@ -31,6 +32,7 @@ mock.module('../src/lib/db.js', () => ({
     recordMetric: mock(() => undefined),
     recordChunksWritten: mock(() => undefined),
     recordFilesProcessed: mock(() => undefined),
+    retryPendingVectors: mock(() => Promise.resolve(0)),
   })),
 }));
 

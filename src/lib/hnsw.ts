@@ -289,6 +289,12 @@ export class HNSWVectorIndex {
           this.entries.delete(oldInternalId);
           this.entries.set(newInternalId, item.entry);
 
+          // Remove old chunkId from fileToChunkIds before adding new mapping
+          const fileChunks = this.fileToChunkIds.get(item.entry.filePath);
+          if (fileChunks) {
+            fileChunks.delete(item.chunkId);
+          }
+
           // Auto-resize if approaching capacity
           if (this.nextInternalId >= Math.floor(this.config.maxElements * 0.95)) {
             const newMax = Math.ceil(this.config.maxElements * 1.5);

@@ -24,6 +24,7 @@ export class FileWatcher extends EventEmitter {
   };
 
   private batchTimer: ReturnType<typeof setTimeout> | null = null;
+  private static readonly MAX_BATCH_SIZE = 500;
   // Profiling metrics
   private metrics = {
     eventCounts: { add: 0, change: 0, unlink: 0 } as Record<string, number>,
@@ -63,6 +64,18 @@ export class FileWatcher extends EventEmitter {
     this.metrics.eventCounts[event]++;
     this.batchEvents[event].add(filePath);
 
+    // Check if batch size exceeds maximum and force flush
+    const totalEvents = Object.values(this.batchEvents).reduce((sum, set) => sum + set.size, 0);
+    if (totalEvents >= FileWatcher.MAX_BATCH_SIZE) {
+      // Force flush immediately
+      if (this.batchTimer) {
+        clearTimeout(this.batchTimer);
+        this.batchTimer = null;
+      }
+      this.flushBatch();
+      return;
+    }
+
     // Reset the debounce timer on every new event so the batch fires only
     // after the debounce window has passed with no further activity.
     if (this.batchTimer) {
@@ -73,20 +86,29 @@ export class FileWatcher extends EventEmitter {
     this.batchTimer = setTimeout(() => {
       // Compute latency once for the whole batch flush, not per event type.
       const latencyMs = Date.now() - start;
-      this.metrics.batchLatencyMs = latencyMs;
-      (["add", "change", "unlink"] as const).forEach((etype) => {
-        const paths = Array.from(this.batchEvents[etype]);
-        if (paths.length > 0) {
-          this.metrics.batchCounts[etype]++;
-          this.metrics.batchSizes[etype] += paths.length;
-          this.emit("batch", etype, paths);
-          this.batchEvents[etype].clear();
-        }
-      });
-      this.batchTimer = null;
+      this.flushBatch(latencyMs);
     }, this.debounceMs);
   }
 
+  /**
+   * Flush the current batch of events.
+   * Called by the debounce timer or when MAX_BATCH_SIZE is exceeded.
+   */
+  private flushBatch(latencyMs?: number): void {
+    if (latencyMs !== undefined) {
+      this.metrics.batchLatencyMs = latencyMs;
+    }
+    (["add", "change", "unlink"] as const).forEach((etype) => {
+      const paths = Array.from(this.batchEvents[etype]);
+      if (paths.length > 0) {
+        this.metrics.batchCounts[etype]++;
+        this.metrics.batchSizes[etype] += paths.length;
+        this.emit("batch", etype, paths);
+        this.batchEvents[etype].clear();
+      }
+    });
+    this.batchTimer = null;
+  }
 
   start(): void {
     if (this.isRunning) return;
