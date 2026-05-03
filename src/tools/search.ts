@@ -22,7 +22,7 @@ function buildPreview(chunkText: string): string {
 
 const _export: ToolDefinition = tool({
   description:
-    "Search the codebase using Beacon hybrid search (semantic embeddings + BM25 + identifier boosting). This tool should be used instead of grep for all code searches as it provides semantic understanding of queries.",
+    "Search the codebase using Beacon hybrid search (semantic embeddings + BM25 + identifier boosting). This tool should be used instead of grep for all code searches as it provides semantic understanding of queries. Set literal=true for exact substring matching (grep-like) against indexed files.",
   args: {
     query: tool.schema.string().describe("Search query (e.g., 'authentication flow')"),
     topK: tool.schema
@@ -41,6 +41,10 @@ const _export: ToolDefinition = tool({
       .boolean()
       .optional()
       .describe("Use pure vector search (disable BM25 and identifier boosting)"),
+    literal: tool.schema
+      .boolean()
+      .optional()
+      .describe("Exact substring match against indexed file content (like grep). Skips embeddings. Use for finding specific strings, variable names, or error messages."),
   },
   async execute(args, context): Promise<string> {
     try {
@@ -56,10 +60,36 @@ const _export: ToolDefinition = tool({
         });
       }
 
-      const cacheOptions = { topK: args.topK, threshold: args.threshold, pathPrefix: args.pathPrefix, noHybrid: args.noHybrid };
+      const cacheOptions = { topK: args.topK, threshold: args.threshold, pathPrefix: args.pathPrefix, noHybrid: args.noHybrid, literal: args.literal };
       const cachedResults = searchCache.get(args.query, cacheOptions);
       if (cachedResults) {
         return JSON.stringify(cachedResults);
+      }
+
+      // Literal / direct string search — bypass embeddings entirely
+      if (args.literal) {
+        const resources = await getCoordinator(context.worktree);
+        try {
+          const { db } = resources;
+          const results = db.literalSearch(
+            args.query,
+            args.topK ?? 20,
+            args.pathPrefix
+          );
+          const output = JSON.stringify({
+            query: args.query,
+            mode: "literal",
+            matches: results.map((r) => ({
+              file: r.filePath,
+              lines: `${r.startLine}-${r.endLine}`,
+              preview: r.chunkText,
+            })),
+          });
+          searchCache.set(args.query, JSON.parse(output), cacheOptions);
+          return output;
+        } finally {
+          await releaseCoordinator(context.worktree);
+        }
       }
 
       // Acquire a pooled connection — avoids spinning up a new DB + ONNX session

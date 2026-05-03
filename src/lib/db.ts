@@ -1181,6 +1181,78 @@ export class BeaconDatabase {
   }
 
   /**
+   * Literal / direct string search (exact substring match)
+   * Bypasses embeddings entirely — like grep but scoped to the Beacon index.
+   */
+  literalSearch(
+    query: string,
+    topK: number = 10,
+    pathPrefix?: string
+  ): SearchResult[] {
+    // Case-insensitive LIKE search against stored chunk content
+    const pattern = `%${query.replace(/[%_\\]/g, '\\$&')}%`;
+
+    let sql = `
+      SELECT
+        file_path,
+        start_line,
+        end_line,
+        chunk_text
+      FROM chunks
+      WHERE chunk_text LIKE ? ESCAPE '\\'
+    `;
+    const params: any[] = [pattern];
+
+    if (pathPrefix) {
+      sql += ` AND file_path LIKE ?`;
+      params.push(`%${pathPrefix}%`);
+    }
+
+    sql += ` ORDER BY file_path, start_line LIMIT ?`;
+    params.push(topK);
+
+    const rows = this.db.prepare(sql).all(...params) as any[];
+
+    return rows.map((row) => {
+      // Extract matching lines with surrounding context (2 lines before/after)
+      const lines = (row.chunk_text as string).split('\n');
+      const queryLower = query.toLowerCase();
+      const matchingLineIndices: number[] = [];
+
+      lines.forEach((line, i) => {
+        if (line.toLowerCase().includes(queryLower)) {
+          matchingLineIndices.push(i);
+        }
+      });
+
+      // Build context window around matches
+      const contextSet = new Set<number>();
+      for (const idx of matchingLineIndices) {
+        for (let c = Math.max(0, idx - 2); c <= Math.min(lines.length - 1, idx + 2); c++) {
+          contextSet.add(c);
+        }
+      }
+
+      const contextLines = Array.from(contextSet).sort((a, b) => a - b);
+      let preview = '';
+      let prev = -2;
+      for (const i of contextLines) {
+        if (i > prev + 1) preview += (preview ? '\n...\n' : '');
+        preview += lines[i];
+        prev = i;
+      }
+
+      return {
+        filePath: row.file_path as string,
+        startLine: row.start_line as number,
+        endLine: row.end_line as number,
+        similarity: 1.0, // exact match — score is always 1.0
+        chunkText: preview || row.chunk_text,
+      } satisfies SearchResult;
+    });
+  }
+
+  /**
    * Combine vector + BM25 results with RRF and hybrid weights
    */
   private combineResults(
