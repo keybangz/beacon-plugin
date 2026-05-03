@@ -124,6 +124,8 @@ const DEFAULT_CONFIG = {
         document_prefix: "",
         api_key_env: "",
         enabled: true,
+        // "auto" = platform-aware auto-detection (coreml on macOS, directml on Windows,
+        // cuda on Linux x64 if FP32 model, else cpu)
         execution_provider: "cpu"
     },
     chunking: {

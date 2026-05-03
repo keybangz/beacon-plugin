@@ -1,6 +1,6 @@
 import { existsSync } from "fs";
 import { dirname, join } from "path";
-import { cpus } from "os";
+import { cpus, platform, arch } from "os";
 import type { EmbedderResult } from "./types.js";
 import { BertTokenizer } from "./bert-tokenizer.js";
 import { CodeBertTokenizer } from "./code-tokenizer.js";
@@ -51,14 +51,18 @@ export interface ONNXEmbedderConfig {
   modelType?: ModelType;
   /**
    * ONNX execution provider.
-   * - "cpu"    — always available (default)
-   * - "cuda"   — NVIDIA GPU (requires onnxruntime-node with CUDA 12 binaries on Linux x64)
-   * - "rocm"   — AMD GPU (requires a custom onnxruntime build with ROCm EP)
-   * - "webgpu" — cross-platform GPU via WebGPU/Dawn → Vulkan on Linux (experimental;
-   *              AMD/NVIDIA/Intel with Vulkan drivers; onnxruntime-node ≥ 1.22 required)
+   * - "cpu"      — always available (default)
+   * - "cuda"     — NVIDIA GPU (requires onnxruntime-node with CUDA 12 binaries on Linux x64)
+   * - "rocm"     — AMD GPU (requires a custom onnxruntime build with ROCm EP)
+   * - "webgpu"   — cross-platform GPU via WebGPU/Dawn → Vulkan on Linux (experimental;
+   *                AMD/NVIDIA/Intel with Vulkan drivers; onnxruntime-node ≥ 1.22 required)
+   * - "directml" — Windows-only, supports AMD/NVIDIA/Intel GPUs (Windows 10+)
+   * - "coreml"   — macOS-only, best for Apple Silicon (macOS 12+)
+   * - "auto"     — platform-aware auto-detection (coreml on macOS, directml on Windows,
+   *                cuda on Linux x64 if FP32 model, else cpu)
    * If the requested provider fails to initialise, automatically falls back to "cpu".
    */
-  executionProvider?: "cpu" | "cuda" | "rocm" | "webgpu";
+  executionProvider?: "cpu" | "cuda" | "rocm" | "webgpu" | "directml" | "coreml" | "auto";
   /**
    * Number of texts to embed per ONNX inference call.
    * Larger batches improve throughput at the cost of peak memory.
@@ -75,6 +79,65 @@ export interface ONNXEmbedderConfig {
 interface Tokenizer {
   encode(text: string, addSpecialTokens?: boolean): number[];
   getPadTokenId(): number;
+}
+
+/**
+ * Resolves the execution provider based on user preference and platform.
+ * - "auto": Platform-aware auto-detection
+ * - Explicit EP: Use as-is
+ */
+function resolveExecutionProvider(
+  requestedEP: "cpu" | "cuda" | "rocm" | "webgpu" | "directml" | "coreml" | "auto" | undefined,
+  modelPath: string
+): { provider: "cpu" | "cuda" | "rocm" | "webgpu" | "directml" | "coreml"; wasAutoSelected: boolean } {
+  // If not auto, use as-is
+  if (requestedEP !== "auto") {
+    return { provider: requestedEP ?? "cpu", wasAutoSelected: false };
+  }
+
+  // Auto-detection logic
+  const currentPlatform = platform();
+  const currentArch = arch();
+  const isLinuxX64 = currentPlatform === "linux" && currentArch === "x64";
+  const isWindows = currentPlatform === "win32";
+  const isMacOS = currentPlatform === "darwin";
+
+  // Check if model is INT8 quantized (check filename)
+  const modelName = modelPath.toLowerCase();
+  const isInt8Quantized = modelName.includes("int8") || modelName.includes("quantized");
+
+  let selectedEP: "cpu" | "cuda" | "rocm" | "webgpu" | "directml" | "coreml" = "cpu";
+
+  try {
+    // Get available providers from ONNX Runtime
+    const availableProviders = _onnxRuntime?.InferenceSession?.getAvailableProviders?.() ?? [];
+
+    if (isMacOS) {
+      // macOS: prefer CoreML if available
+      if (availableProviders.includes("coreml")) {
+        selectedEP = "coreml";
+      }
+    } else if (isWindows) {
+      // Windows: prefer DirectML if available
+      if (availableProviders.includes("directml")) {
+        selectedEP = "directml";
+      }
+    } else if (isLinuxX64) {
+      // Linux x64: prefer CUDA if available AND model is NOT INT8 quantized
+      // INT8 models have known CUDA kernel gaps in onnxruntime-node
+      if (availableProviders.includes("cuda") && !isInt8Quantized) {
+        selectedEP = "cuda";
+      }
+    }
+    // Fallback is already "cpu"
+  } catch {
+    // If getAvailableProviders fails, stick with CPU
+    selectedEP = "cpu";
+  }
+
+  log.info("beacon", `GPU auto-detection: selected ${selectedEP} execution provider`);
+
+  return { provider: selectedEP, wasAutoSelected: true };
 }
 
 export class ONNXEmbedder {
@@ -117,16 +180,27 @@ export class ONNXEmbedder {
       // "webgpu" must be supplied as an object { name: "webgpu" } — ONNX Runtime
       // does not recognise it as a plain string EP the way "cpu"/"cuda"/"rocm" are.
       const requestedEP = this.config.executionProvider ?? "cpu";
+
+      // Resolve auto-detection if needed
+      const { provider: resolvedEP } = resolveExecutionProvider(
+        requestedEP,
+        this.config.modelPath
+      );
+
       const primaryEP: string | { name: string; deviceId?: number } =
-        requestedEP === "webgpu"
+        resolvedEP === "webgpu"
           ? { name: "webgpu" }
-          : requestedEP === "cuda"
+          : resolvedEP === "cuda"
             ? { name: "cuda", deviceId: 0 }
-            : requestedEP === "rocm"
+            : resolvedEP === "rocm"
               ? { name: "rocm", deviceId: 0 }
-              : requestedEP;
+              : resolvedEP === "directml"
+                ? { name: "directml" }
+                : resolvedEP === "coreml"
+                  ? { name: "coreml" }
+                  : resolvedEP;
       const executionProviders: Array<string | { name: string; deviceId?: number }> =
-        requestedEP === "cpu"
+        resolvedEP === "cpu"
           ? ["cpu"]
           : [primaryEP, "cpu"]; // GPU first, CPU fallback
 
@@ -165,8 +239,8 @@ export class ONNXEmbedder {
         this.session = await createSession(executionProviders);
       } catch (epError: unknown) {
         // If the session creation failed or timed out, retry with CPU only.
-        if (requestedEP !== "cpu") {
-          log.warn("beacon", `${requestedEP.toUpperCase()} execution provider failed — falling back to CPU`, { error: epError instanceof Error ? epError.message : String(epError) });
+        if (resolvedEP !== "cpu") {
+          log.warn("beacon", `${resolvedEP.toUpperCase()} execution provider failed — falling back to CPU`, { error: epError instanceof Error ? epError.message : String(epError) });
           this.session = await createSession(["cpu"]);
         } else {
           throw epError;

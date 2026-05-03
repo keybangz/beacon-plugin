@@ -77,7 +77,7 @@ const _export: ToolDefinition = tool({
     key: tool.schema
       .string()
       .optional()
-      .describe("Config key to view or modify (e.g., 'embedding.model', 'embedding.execution_provider')"),
+      .describe("Config key to view or modify (e.g., 'embedding.model', 'embedding.execution_provider'). For execution_provider, valid values are: 'cpu' (default), 'auto' (platform-aware auto-detect), 'cuda' (Linux x64), 'directml' (Windows), 'coreml' (macOS), 'webgpu' (experimental), 'rocm' (AMD GPU)"),
     value: tool.schema
       .string()
       .optional()
