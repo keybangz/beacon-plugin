@@ -20,5 +20,5 @@ The following are excluded by default (via `.beaconignore`):
 ## Notes
 - Patterns use glob syntax (same as `.gitignore`)
 - After adding/removing patterns, run `/reindex` to apply changes
-- Per-project patterns are stored in `.opencode/beacon.json` under `indexing.ignore_patterns`
+- Per-project patterns are stored in `.opencode/blacklist.json` (managed by this tool — do not edit manually)
 - Use `/whitelist` to force-include paths that match blacklist patterns

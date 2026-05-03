@@ -64,13 +64,15 @@ function ensureUserConfig(worktree: string): {
     defaultConfig = {
       embedding: {
         api_base: "local",
-        model: "all-MiniLM-L6-v2",
-        dimensions: 384,
+        model: "jina-embeddings-v2-base-code",
+        dimensions: 768,
         batch_size: 32,
-        context_limit: 256,
+        context_limit: 512,
         query_prefix: "",
+        document_prefix: "",
         api_key_env: "",
         enabled: true,
+        execution_provider: "cpu",
       },
       chunking: {
         strategy: "hybrid",
@@ -79,33 +81,65 @@ function ensureUserConfig(worktree: string): {
       },
       indexing: {
         include: [
-          "**/*.ts",
-          "**/*.tsx",
-          "**/*.js",
-          "**/*.jsx",
-          "**/*.py",
+          "**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.cjs",
+          "**/*.py", "**/*.pyi",
           "**/*.go",
           "**/*.rs",
-          "**/*.java",
-          "**/*.rb",
-          "**/*.php",
+          "**/*.java", "**/*.kt", "**/*.kts", "**/*.scala", "**/*.groovy",
+          "**/*.cs", "**/*.fs", "**/*.fsx",
+          "**/*.c", "**/*.cpp", "**/*.cc", "**/*.cxx", "**/*.h", "**/*.hpp", "**/*.hxx",
+          "**/*.vue", "**/*.svelte", "**/*.astro",
+          "**/*.html", "**/*.htm", "**/*.css", "**/*.scss", "**/*.sass", "**/*.less",
+          "**/*.rb", "**/*.rake", "**/*.erb",
+          "**/*.php", "**/*.phtml",
+          "**/*.swift", "**/*.m", "**/*.mm",
+          "**/*.dart",
+          "**/*.ex", "**/*.exs", "**/*.erl", "**/*.hrl",
+          "**/*.hs", "**/*.lhs", "**/*.ml", "**/*.mli",
+          "**/*.lua",
+          "**/*.sh", "**/*.bash", "**/*.zsh", "**/*.fish", "**/*.ps1", "**/*.psm1",
           "**/*.sql",
-          "**/*.md",
+          "**/*.json", "**/*.jsonc", "**/*.yaml", "**/*.yml", "**/*.toml", "**/*.xml",
+          "**/*.md", "**/*.mdx", "**/*.rst", "**/*.txt",
+          "**/*.tf", "**/*.hcl", "**/*.dockerfile", "**/Dockerfile", "**/Makefile", "**/*.mk", "**/*.cmake", "**/CMakeLists.txt",
+          "**/*.graphql", "**/*.gql", "**/*.prisma", "**/*.proto",
         ],
         exclude: [
-          "node_modules/**",
-          "dist/**",
-          "build/**",
-          ".next/**",
-          "*.lock",
-          "*.min.js",
-          ".git/**",
-          ".env*",
+          ".git/**", ".svn/**", ".hg/**", ".bzr/**",
+          "node_modules/**", "vendor/**", "bower_components/**", "__pypackages__/**", ".pnp/**", ".yarn/cache/**",
+          "venv/**", ".venv/**", "env/**", ".env/**", "__pycache__/**", ".pytest_cache/**", ".mypy_cache/**", ".ruff_cache/**", ".tox/**", "*.egg-info/**", "site-packages/**",
+          "dist/**", "build/**", "out/**", "output/**", "target/**", "bin/**", "obj/**",
+          ".next/**", ".nuxt/**", ".svelte-kit/**", "_site/**", "public/build/**", ".turbo/**", ".vercel/**", ".netlify/**",
+          "*.class", "*.jar", "*.war", "*.aar", ".gradle/**", "gradle/**",
+          "*.min.js", "*.min.css", "*.map", "*.pb.go", "*_pb2.py", "*.generated.ts", "*.generated.js",
+          "*.lock", "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "Pipfile.lock", "poetry.lock", "Cargo.lock", "go.sum", "Gemfile.lock", "composer.lock",
+          ".env", ".env.*", "*.pem", "*.key", "*.p12", "*.pfx", "secrets/**", ".secrets/**",
+          ".idea/**", ".vscode/**", ".vs/**", "*.swp", "*.swo",
+          ".DS_Store", "Thumbs.db", "desktop.ini",
+          ".cache/**", "tmp/**", "temp/**", ".temp/**", ".tmp/**",
+          "coverage/**", ".nyc_output/**", "htmlcov/**", ".coverage",
+          "logs/**", "*.log",
+          "*.png", "*.jpg", "*.jpeg", "*.gif", "*.ico", "*.svg", "*.webp", "*.woff", "*.woff2", "*.ttf", "*.eot", "*.otf", "*.mp4", "*.mp3", "*.webm",
+          "*.zip", "*.tar", "*.gz", "*.tgz", "*.bz2", "*.7z", "*.rar",
+          "*.sqlite", "*.sqlite3", "*.db",
+          ".terraform/**", "*.tfstate", "*.tfstate.backup",
+          ".opencode/**",
+          "*.dll", "*.exe", "*.pdb", "*.nupkg", "packages/**",
+          "*.o", "*.a", "*.so", "*.dylib", "CMakeFiles/**", "cmake-build-*/**",
+          "*.xcodeproj/**", "*.xcworkspace/**", "DerivedData/**", "Pods/**", ".build/**",
+          "*.apk", "*.aab", "*.dex",
+          ".dart_tool/**",
+          ".bundle/**",
+          "*.phar",
+          "_build/**", ".elixir_ls/**", "deps/**",
+          ".stack-work/**", "dist-newstyle/**",
+          "*.pyc", "*.pyo", "*.beam", "*.hi",
+          "storybook-static/**", "__snapshots__/**",
         ],
         max_file_size_kb: 500,
         auto_index: true,
         max_files: 10000,
-        concurrency: 4,
+        concurrency: 8,
       },
       search: {
         top_k: 10,
@@ -368,7 +402,7 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
 
     // Check for explicit file extensions or context
     const hasFileExtension =
-      /\.(ts|tsx|js|jsx|py|go|rs|java|rb|php|sql|md)$/m.test(command);
+      /\.(ts|tsx|js|jsx|mjs|cjs|py|pyi|go|rs|java|kt|kts|scala|cs|fs|c|cpp|cc|cxx|h|hpp|vue|svelte|astro|html|css|scss|rb|php|swift|dart|ex|exs|erl|hs|lua|sh|bash|sql|md|mdx|tf|graphql|proto)$/m.test(command);
     const hasQueryNoFile = /^[^>]*grep\s+[^|]*['"][^'"]+['"][^|]*$/m.test(
       command,
     );
@@ -644,7 +678,8 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
         // Silent fail
       }
 
-      // Auto-copy command docs to global opencode command dir
+      // Auto-copy command docs to global opencode command dir on every init
+      // so that plugin upgrades automatically update slash commands.
       try {
         const srcCommandDir = path.join(__dirname, "..", "command");
         const dstCommandDir = path.join(
@@ -654,9 +689,7 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
           "command",
         );
         if (fs.existsSync(srcCommandDir)) {
-          if (!fs.existsSync(dstCommandDir)) {
-            fs.mkdirSync(dstCommandDir, { recursive: true });
-          }
+          fs.mkdirSync(dstCommandDir, { recursive: true });
           for (const file of fs.readdirSync(srcCommandDir)) {
             if (file.endsWith(".md")) {
               fs.copyFileSync(

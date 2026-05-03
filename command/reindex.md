@@ -25,3 +25,4 @@ Returns a summary with:
 - Deletes the existing index and rebuilds from scratch — can take 10–60 seconds for large repos
 - Live progress notifications are sent at 25%, 50%, 75%, and 100% milestones
 - Does not require stopping other operations first
+- If the index is corrupt or search results are wrong, try `/config action="reset"` first to restore default settings, then reindex
