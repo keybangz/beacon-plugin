@@ -4,7 +4,7 @@ import { loadConfig } from "../lib/config.js";
 import { openDatabase } from "../lib/db.js";
 import { Embedder } from "../lib/embedder.js";
 import { connectionPool } from "../lib/pool.js";
-import { getFailedIndexFiles } from "../../beacon.js";
+import { getFailedIndexFiles } from "../lib/index-state.js";
 import { join } from "path";
 import { existsSync } from "fs";
 

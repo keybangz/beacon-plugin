@@ -6,7 +6,7 @@ import { Embedder } from "../lib/embedder.js";
 import { IndexCoordinator, type IndexProgress } from "../lib/sync.js";
 import { connectionPool } from "../lib/pool.js";
 import { clearSearchCache } from "./search.js";
-import { clearFailedIndexFiles } from "../../beacon.js";
+import { clearFailedIndexFiles } from "../lib/index-state.js";
 import { join } from "path";
 import { mkdirSync, existsSync, unlinkSync } from "fs";
 

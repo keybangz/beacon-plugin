@@ -20,6 +20,7 @@ import { getOrCreateWatcher } from "./src/lib/watcher.js";
 import type { FileWatcher } from "./src/lib/watcher.js";
 import { getCoordinator, releaseCoordinator } from "./src/lib/pool.js";
 import type { IndexProgress } from "./src/lib/sync.js";
+import { getFailedIndexFiles, clearFailedIndexFiles, addFailedIndexFile, removeFailedIndexFile } from "./src/lib/index-state.js";
 
 // ESM-compatible __dirname substitute (works on Node 18+ and all Bun versions)
 const __filename = fileURLToPath(import.meta.url);
@@ -304,17 +305,6 @@ class InitMutex {
       this.locked = false;
     }
   }
-}
-
-// Track files that failed to index for observability
-const failedIndexFiles = new Set<string>();
-
-export function getFailedIndexFiles(): string[] {
-  return Array.from(failedIndexFiles).slice(0, 10);
-}
-
-export function clearFailedIndexFiles(): void {
-  failedIndexFiles.clear();
 }
 
 const DEFAULT_BEACONIGNORE = `# Beacon ignore file
@@ -771,10 +761,10 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
               filePaths.map(async (filePath) => {
                 const success = await pooled!.coordinator.reembedFile(filePath);
                 if (!success) {
-                  failedIndexFiles.add(filePath);
+                  addFailedIndexFile(filePath);
                   log.warn("beacon", "Failed to reindex file", { file: filePath });
                 } else {
-                  failedIndexFiles.delete(filePath);
+                  removeFailedIndexFile(filePath);
                 }
                 return success;
               })
@@ -783,7 +773,7 @@ export const BeaconPlugin: Plugin = async ({ client, worktree }) => {
             results.forEach((result, index) => {
               if (result.status === "rejected") {
                 const errorMsg = result.reason instanceof Error ? result.reason.message : String(result.reason);
-                failedIndexFiles.add(filePaths[index]);
+                addFailedIndexFile(filePaths[index]);
                 log.warn("beacon", "Failed to reindex file", { file: filePaths[index], error: errorMsg });
               }
             });
